@@ -117,14 +117,29 @@ class WhaleSocialPlugin(Star):
             return None
         return getattr(response, "completion_text", "") or ""
 
-    async def _send_message(self, umo: str, text: str) -> bool:
+    async def _send_message(self, umo: str, text: str, mention_user_id: Optional[str] = None) -> bool:
         try:
-            chain = MessageChain().message(text)
+            chain = self._build_chain(text, mention_user_id)
             result = await self.context.send_message(umo, chain)
             return bool(result)
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] send_message failed: {exc}")
             return False
+
+    def _build_chain(self, text: str, mention_user_id: Optional[str]):
+        """Build a MessageChain, optionally @-mentioning a user.
+
+        Falls back to plain text when the At component is unavailable; the
+        plugin never fails a reply just because it could not mention.
+        """
+        if mention_user_id:
+            try:
+                from astrbot.api.message_components import At, Plain
+
+                return MessageChain([At(qq=mention_user_id), Plain(text=text)])
+            except Exception as exc:  # pragma: no cover - depends on AstrBot version
+                logger.debug(f"[{PLUGIN_NAME}] mention fallback to plain text: {exc}")
+        return MessageChain().message(text)
 
     async def _memory_writeback(self, umo: str, user_text: str, assistant_text: str) -> None:
         try:
@@ -154,6 +169,33 @@ class WhaleSocialPlugin(Star):
 
     # -- event handlers --------------------------------------------------
 
+    @staticmethod
+    def _extract_relations(event: AstrMessageEvent) -> tuple[str, list[str]]:
+        """Best-effort extraction of quoted message id and @-ed users.
+
+        Uses the message component class names so it keeps working across
+        AstrBot adapters/versions; anything unrecognized is ignored.
+        """
+        reply_to = ""
+        at_users: list[str] = []
+        message_obj = getattr(event, "message_obj", None)
+        parts = getattr(message_obj, "message", None)
+        if not isinstance(parts, (list, tuple)):
+            return reply_to, at_users
+        for part in parts:
+            name = type(part).__name__.lower()
+            if name == "reply":
+                identifier = getattr(part, "id", None) or getattr(part, "message_id", None)
+                reply_to = str(identifier or "")
+            elif name == "at":
+                qq = getattr(part, "qq", None)
+                if qq is None:
+                    continue
+                token = str(qq)
+                if token and token.lower() != "all":
+                    at_users.append(token)
+        return reply_to, at_users
+
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent) -> None:
         """Observe group messages. Never stops propagation, never replies."""
@@ -163,6 +205,9 @@ class WhaleSocialPlugin(Star):
             self_id = getattr(message_obj, "self_id", None)
             is_bot = bool(self_id) and str(self_id) == sender_id
             message_id = str(getattr(message_obj, "message_id", "") or "")
+            reply_to, at_users = ("", [])
+            if self.cfg.extract_message_segments:
+                reply_to, at_users = self._extract_relations(event)
             await self.engine.handle_message(
                 event.unified_msg_origin,
                 message_id=message_id,
@@ -171,6 +216,8 @@ class WhaleSocialPlugin(Star):
                 is_bot=is_bot,
                 kind="text",
                 mentioned=bool(getattr(event, "is_at_or_wake_command", False)),
+                reply_to=reply_to,
+                at_users=at_users,
             )
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] on_group_message failed: {exc}")
@@ -225,6 +272,10 @@ class WhaleSocialPlugin(Star):
             lines.append(f"社交能量：{state.social_energy:.2f}")
             lines.append(f"今日主动：{state.proactive_sent_today}/{self.cfg.daily_proactive_cap}")
             lines.append(f"连续机器人发言：{state.consecutive_bot_messages}")
+            active_threads = [thread for thread in state.threads if not thread.ended]
+            lines.append(f"活跃会话：{len(active_threads)}")
+            if state.debounce_deadline > now:
+                lines.append(f"防抖等待：{max(0.0, state.debounce_deadline - now):.1f}s")
             lines.append(f"上次决策：{self.engine.last_decision.get(umo, '无')}")
         global_state = self.engine.flow.global_state
         lines.append(
@@ -267,11 +318,20 @@ class WhaleSocialPlugin(Star):
         backoff = ""
         if state.send_blocked_until > time.time():
             backoff = f"失败退避剩余：{int(state.send_blocked_until - time.time())}s\n"
+        active_threads = [thread for thread in state.threads if not thread.ended]
+        thread_lines = "\n".join(
+            f"  - {thread.id}｜{thread.topic or '未识别'}｜{len(thread.messages)}条｜"
+            f"活跃度 {thread.activity_score:.2f}"
+            for thread in active_threads
+        )
+        if thread_lines:
+            thread_lines = f"\n活跃会话：\n{thread_lines}"
         yield event.plain_result(
             f"上次决策：{decision}\n"
             f"冷却：{'进行中' if state.next_speak_after > time.time() else '已就绪'}\n"
             f"{backoff}"
             f"连续机器人发言：{state.consecutive_bot_messages}\n"
             f"被忽略：{'是' if state.last_bot_ignored else '否'}\n"
+            f"{thread_lines}\n"
             f"当前时间：{moment.strftime('%H:%M:%S')}（允许时段 {self.cfg.active_hours}）"
         )

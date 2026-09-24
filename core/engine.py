@@ -1,7 +1,12 @@
-"""Social engine: orchestration of collect -> gate -> score -> LLM -> reply.
+"""Social engine: orchestration of collect -> debounce -> thread select -> LLM -> reply.
 
 All AstrBot interaction is injected as async callables so the engine can be
 exercised in tests with fakes.
+
+V2.0 flow: every observed message is clustered into a conversation thread. A
+burst of activity in a group arms a per-group debounce; when the group falls
+quiet (or the max wait elapses) the engine selects one thread and asks the LLM
+whether to join it.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from typing import Any, Optional
 from core.collector import MessageCollector
 from core.config import PluginConfig
 from core.cooldown import in_cooldown, settle_reply_window
+from core.debounce import DebounceTracker
 from core.decision import build_decision_prompt, build_system_prompt, parse_decision
 from core.flow import FlowController
 from core.gate import check_gate
@@ -23,11 +29,23 @@ from core.memory import build_group_hint
 from core.models import GroupState
 from core.reply import sanitize_reply
 from core.scorer import compute_score
+from core.threads import (
+    assign_thread,
+    attach_bot_message,
+    find_thread,
+    format_overview,
+    last_human_message,
+    most_recent_thread,
+    prune_threads,
+    refresh_activities,
+    select_thread,
+    thread_is_active,
+)
 from core.timeutil import day_key
 from core.topic import keyword_hits
 
 LlmDecide = Callable[[str, str, str], Awaitable[Optional[str]]]
-SendMessage = Callable[[str, str], Awaitable[bool]]
+SendMessage = Callable[[str, str, Optional[str]], Awaitable[bool]]
 Writeback = Callable[[str, str, str], Awaitable[None]]
 OnChange = Callable[[], None]
 Clock = Callable[[], float]
@@ -40,7 +58,8 @@ ENERGY_FLOOR = 0.1
 MENTION_HOLD_SECONDS = 60.0
 REPLY_MIN_DELAY = 2.0
 REPLY_MAX_DELAY = 8.0
-REPLY_DELAY_HORIZON = 5.0
+MAX_PROBABILITY = 0.8
+SCORING_TAIL = 5
 
 
 class SocialEngine:
@@ -69,7 +88,10 @@ class SocialEngine:
         self.collector = MessageCollector(config)
         self.flow = FlowController(config)
         self.pending: dict[str, asyncio.Task[None]] = {}
+        self.debounce_tasks: dict[str, asyncio.Task[None]] = {}
         self.last_decision: dict[str, str] = {}
+        self._debounce_events: dict[str, asyncio.Event] = {}
+        self._closed = False
 
     # -- state helpers ---------------------------------------------------
 
@@ -101,6 +123,7 @@ class SocialEngine:
         return True
 
     def reset_group(self, umo: str) -> None:
+        self._cancel_group_tasks(umo)
         if umo in self.states:
             del self.states[umo]
         self._notify()
@@ -132,6 +155,7 @@ class SocialEngine:
             for umo, state in list(self.states.items()):
                 last_seen = max(state.last_user_message_time, state.last_bot_message_time)
                 if last_seen > 0 and now - last_seen > ttl:
+                    self._cancel_group_tasks(umo)
                     del self.states[umo]
                     removed.append(umo)
 
@@ -145,11 +169,20 @@ class SocialEngine:
                 reverse=True,
             )
             for umo, _state in ordered[cap:]:
+                self._cancel_group_tasks(umo)
                 del self.states[umo]
                 removed.append(umo)
         if removed:
             self._notify()
         return removed
+
+    def _cancel_group_tasks(self, umo: str) -> None:
+        for task in (self.pending.get(umo), self.debounce_tasks.get(umo)):
+            if task is not None and not task.done():
+                task.cancel()
+        self.pending.pop(umo, None)
+        self.debounce_tasks.pop(umo, None)
+        self._debounce_events.pop(umo, None)
 
     def _notify(self) -> None:
         if self.on_change is None:
@@ -181,6 +214,8 @@ class SocialEngine:
         is_bot: bool = False,
         kind: str = "text",
         mentioned: bool = False,
+        reply_to: str = "",
+        at_users: Optional[list[str]] = None,
     ) -> None:
         """Observe one message. Never raises; never replies to a mention."""
         if not self.config.enabled or not self.is_allowed_group(umo):
@@ -199,9 +234,15 @@ class SocialEngine:
             is_bot=is_bot,
             kind=kind,
             now=now,
+            reply_to=reply_to,
+            at_users=at_users,
         )
         if recorded is None:
             return  # duplicate event
+
+        if not is_bot:
+            state.revision += 1
+        self._track_thread(state, recorded, is_bot=is_bot, umo=umo, now=now)
 
         if is_bot:
             self._notify()
@@ -231,23 +272,27 @@ class SocialEngine:
             self._notify()
             return
 
-        breakdown = compute_score(state, text, self.config, now, umo=umo)
-        if breakdown.total <= 0:
-            self._notify()
-            return
-
-        probability = min(
-            max(self.config.base_speak_probability * breakdown.total, 0.0),
-            0.8,
-        )
-        if self.rng.random() > probability:
-            self._notify()
-            return
-
-        task = asyncio.create_task(self._evaluate_and_reply(umo, text))
-        self.pending[umo] = task
-        task.add_done_callback(self._done_callback(umo, task))
+        self._arm_debounce(umo, now)
         self._notify()
+
+    def _track_thread(
+        self,
+        state: GroupState,
+        message: dict[str, Any],
+        *,
+        is_bot: bool,
+        umo: str,
+        now: float,
+    ) -> None:
+        if is_bot:
+            thread = find_thread(state, state.selected_thread_id) or most_recent_thread(
+                state, self.config, now
+            )
+            if thread is not None:
+                attach_bot_message(thread, message, self.config, now)
+            return
+        assign_thread(state, message, self.config, now, umo=umo)
+        prune_threads(state, self.config, now)
 
     def _done_callback(self, umo: str, task: "asyncio.Task[None]"):
         def _callback(_task: "asyncio.Task[None]") -> None:
@@ -265,17 +310,112 @@ class SocialEngine:
             state.social_energy + delta, self.config.energy_max
         )
 
-    async def _evaluate_and_reply(self, umo: str, trigger_text: str) -> None:
+    # -- debounce --------------------------------------------------------
+
+    def _arm_debounce(self, umo: str, now: float) -> None:
+        if self._closed:
+            return
         state = self.get_state(umo)
-        if in_cooldown(state, self.clock()):
+        DebounceTracker.arm(state, self.config, now)
+        event = self._debounce_events.get(umo)
+        if event is None:
+            self._debounce_events[umo] = asyncio.Event()
+            self.debounce_tasks[umo] = asyncio.create_task(self._debounce_worker(umo))
+        else:
+            event.set()
+
+    async def _debounce_worker(self, umo: str) -> None:
+        state = self.get_state(umo)
+        try:
+            while True:
+                now = self.clock()
+                remaining = DebounceTracker.remaining(state, now)
+                if remaining <= 0:
+                    break
+                event = self._debounce_events.get(umo)
+                if event is None:
+                    break
+                event.clear()
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+        finally:
+            self._debounce_events.pop(umo, None)
+            self.debounce_tasks.pop(umo, None)
+            DebounceTracker.clear(state)
+        await self._on_debounce_fire(umo)
+
+    async def _on_debounce_fire(self, umo: str) -> None:
+        """Group has settled: pick one thread and maybe start a decision."""
+        if self._closed:
+            return
+        state = self.get_state(umo)
+        now = self.clock()
+
+        if now < state.mentioned_until:
+            state.mentioned_until = 0.0
+            self._notify()
             return
 
-        hint = build_group_hint(state, self.config, self.clock())
+        gate = check_gate(state, self.config, now, datetime.fromtimestamp(now), flow=self.flow)
+        if not gate.allowed:
+            self._notify()
+            return
+
+        refresh_activities(state, self.config, now)
+        thread = select_thread(state, self.config, now, umo=umo)
+        if thread is None:
+            self._notify()
+            return
+
+        trigger = last_human_message(thread)
+        trigger_text = str(trigger.get("text", "")) if trigger else ""
+        scored_text = " ".join(
+            str(item.get("text", "")) for item in thread.messages[-SCORING_TAIL:]
+        )
+        breakdown = compute_score(state, scored_text, self.config, now, umo=umo)
+        if breakdown.total <= 0:
+            self._notify()
+            return
+
+        probability = min(
+            max(self.config.base_speak_probability * breakdown.total, 0.0),
+            MAX_PROBABILITY,
+        )
+        if self.rng.random() > probability:
+            self._notify()
+            return
+
+        state.selected_thread_id = thread.id
+        task = asyncio.create_task(self._evaluate_and_reply(umo, thread.id, trigger_text))
+        self.pending[umo] = task
+        task.add_done_callback(self._done_callback(umo, task))
+        self._notify()
+
+    # -- decision + reply ------------------------------------------------
+
+    async def _evaluate_and_reply(self, umo: str, thread_id: str, trigger_text: str) -> None:
+        state = self.get_state(umo)
+        now = self.clock()
+        if in_cooldown(state, now):
+            return
+
+        thread = find_thread(state, thread_id)
+        if thread is None or not thread_is_active(thread, self.config, now):
+            self.last_decision[umo] = "thread_ended"
+            return
+
+        hint = build_group_hint(state, self.config, now)
         system_prompt = build_system_prompt(self.config)
         prompt = build_decision_prompt(
-            context_text=self.collector.build_context(state),
+            context_text=self.collector.format_messages(thread.messages),
             trigger_text=trigger_text,
             hint=hint,
+            thread_id=thread.id,
+            threads_overview=format_overview(
+                state, self.config, now, exclude_id=thread.id
+            ),
         )
 
         raw = await self.llm_decide(umo, system_prompt, prompt)
@@ -284,19 +424,31 @@ class SocialEngine:
             self.last_decision[umo] = "parse_failed"
             return
 
+        chosen = thread
+        if decision.thread_id:
+            candidate = find_thread(state, decision.thread_id)
+            if candidate is None or not thread_is_active(candidate, self.config, self.clock()):
+                self.last_decision[umo] = "bad_thread"
+                return
+            chosen = candidate
+
         self.last_decision[umo] = decision.action
 
         if decision.action == "IGNORE":
             # P0 fix: IGNORE is a local choice, not "the bot was ignored".
             return
         if decision.action == "WAIT":
-            state.shown_topic = decision.topic or state.shown_topic
+            state.selected_thread_id = chosen.id
+            state.shown_topic = decision.topic or chosen.topic or state.shown_topic
             return
 
         reply = sanitize_reply(decision.reply, self.config.blocklist())
         if not reply:
             self.last_decision[umo] = "empty_reply"
             return
+
+        state.selected_thread_id = chosen.id
+        mention_user_id = self._mention_target(chosen, decision)
 
         await self.sleep(self.rng.uniform(REPLY_MIN_DELAY, REPLY_MAX_DELAY))
 
@@ -308,8 +460,8 @@ class SocialEngine:
             state.mentioned_until = 0.0
             self.last_decision[umo] = "mentioned_cancel"
             return
-        if not self._topic_still_relevant(state, umo, decision.topic):
-            self.last_decision[umo] = "topic_changed"
+        if not thread_is_active(chosen, self.config, now):
+            self.last_decision[umo] = "thread_ended"
             return
 
         allowed, reason = self.flow.check(state, now)
@@ -322,7 +474,7 @@ class SocialEngine:
             return
 
         self.flow.reserve(state, now)
-        sent = await self.send_message(umo, reply)
+        sent = await self.send_message(umo, reply, mention_user_id)
         if not sent:
             self.flow.rollback(state, now)
             self.last_decision[umo] = "send_failed"
@@ -331,6 +483,7 @@ class SocialEngine:
         self.flow.commit_success(state, now)
 
         state.mentioned_until = 0.0
+        state.shown_topic = decision.topic or chosen.topic or state.shown_topic
         self.collector.note_outgoing(
             state, self.config, reply, now=self.clock(), rng=self.rng
         )
@@ -343,35 +496,39 @@ class SocialEngine:
                 pass
         self._notify()
 
-    def _topic_still_relevant(self, state: GroupState, umo: str, topic: str) -> bool:
-        """Re-check after the reply delay that the topic did not move on.
-
-        Only enforced when there is enough recent traffic to judge; a quiet
-        group should not cancel a perfectly good reply.
-        """
-        recent = [
-            str(item.get("text", ""))
-            for item in state.messages[-int(REPLY_DELAY_HORIZON):]
-            if not item.get("is_bot")
-        ]
-        if len(recent) < 2:
-            return True
-        keywords = self.config.interest_keyword_list(umo)
-        if keyword_hits(topic, keywords):
-            return True
-        return bool(keyword_hits(" ".join(recent), keywords))
+    def _mention_target(self, thread, decision) -> Optional[str]:
+        if decision.target_type != "USER" or not decision.target_user_id:
+            return None
+        if not self.config.reply_mention_user:
+            return None
+        if decision.target_user_id not in thread.participants:
+            return None
+        return decision.target_user_id
 
     # -- lifecycle -------------------------------------------------------
 
     async def wait_idle(self) -> None:
-        tasks = [task for task in self.pending.values() if not task.done()]
-        if tasks:
+        for _ in range(1000):
+            tasks = [
+                task
+                for task in list(self.debounce_tasks.values()) + list(self.pending.values())
+                if not task.done()
+            ]
+            if not tasks:
+                return
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def shutdown(self) -> None:
-        tasks = [task for task in self.pending.values() if not task.done()]
+        self._closed = True
+        tasks = [
+            task
+            for task in list(self.debounce_tasks.values()) + list(self.pending.values())
+            if not task.done()
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self.debounce_tasks.clear()
         self.pending.clear()
+        self._debounce_events.clear()

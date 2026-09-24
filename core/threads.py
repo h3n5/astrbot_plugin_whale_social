@@ -21,6 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 TARGET_GROUP = "GROUP"
 TARGET_USER = "USER"
+THREAD_MESSAGE_LIMIT = 50
 
 
 @dataclass
@@ -83,6 +84,12 @@ def compute_activity(thread: ConversationThread, config: "PluginConfig", now: fl
     return score
 
 
+def _trim_messages(thread: ConversationThread) -> None:
+    overflow = len(thread.messages) - THREAD_MESSAGE_LIMIT
+    if overflow > 0:
+        del thread.messages[:overflow]
+
+
 def add_message_to_thread(
     thread: ConversationThread,
     message: dict[str, Any],
@@ -97,7 +104,35 @@ def add_message_to_thread(
         thread.bot_participated = True
         thread.last_bot_message_time = now
     _update_topic(thread, str(message.get("text", "")), keywords)
+    _trim_messages(thread)
     thread.activity_score = compute_activity(thread, config, now)
+
+
+def attach_bot_message(
+    thread: ConversationThread,
+    message: dict[str, Any],
+    config: "PluginConfig",
+    now: float,
+) -> None:
+    """Attach a bot message without adding the bot to ``participants``."""
+    thread.messages.append(message)
+    thread.last_activity = now
+    thread.bot_participated = True
+    thread.last_bot_message_time = now
+    _trim_messages(thread)
+    thread.activity_score = compute_activity(thread, config, now)
+
+
+def most_recent_thread(
+    state: "GroupState",
+    config: "PluginConfig",
+    now: float,
+) -> Optional[ConversationThread]:
+    window = float(config.thread_window_seconds)
+    active = _active_threads(state, now, window)
+    if not active:
+        return None
+    return max(active, key=lambda thread: thread.last_activity)
 
 
 def _thread_keyword_match(thread: ConversationThread, text: str, keywords: Iterable[str]) -> bool:
@@ -147,21 +182,24 @@ def assign_thread(
     """Attach a message to the best matching thread, or start a new one.
 
     Matching priority: reply relation -> @ relation -> keyword overlap ->
-    participant overlap -> new thread.
+    participant overlap -> new thread. The matched thread is always updated
+    (message appended, participants/activity/topic refreshed).
     """
     keywords = config.interest_keyword_list(umo)
     gap = float(config.thread_join_time_gap_seconds)
+    target: Optional[ConversationThread] = None
 
     # 1. Explicit quote/reply to a known message.
     reply_to = str(message.get("reply_to", "") or "")
     if reply_to:
         for thread in state.threads:
             if any(str(item.get("message_id", "")) == reply_to for item in thread.messages):
-                return thread
+                target = thread
+                break
 
     # 2. @ someone who recently spoke in a thread -> that thread.
     at_users = [str(user) for user in (message.get("at_users") or [])]
-    if at_users:
+    if target is None and at_users:
         best: Optional[ConversationThread] = None
         for thread in state.threads:
             if thread.ended:
@@ -173,30 +211,36 @@ def assign_thread(
                     if best is None or thread.last_activity > best.last_activity:
                         best = thread
                     break
-        if best is not None:
-            return best
+        target = best
 
     # 3. Time-bounded keyword / participant overlap.
-    candidates = [
-        thread
-        for thread in state.threads
-        if not thread.ended and (gap <= 0 or now - thread.last_activity <= gap)
-    ]
-    if candidates:
-        text = str(message.get("text", ""))
-        keyword_candidates = [
-            thread for thread in candidates if _thread_keyword_match(thread, text, keywords)
-        ]
-        pool = keyword_candidates or [
+    if target is None:
+        candidates = [
             thread
-            for thread in candidates
-            if str(message.get("sender", "")) in thread.participants
+            for thread in state.threads
+            if not thread.ended and (gap <= 0 or now - thread.last_activity <= gap)
         ]
-        if pool:
-            return max(pool, key=lambda thread: thread.last_activity)
+        if candidates:
+            text = str(message.get("text", ""))
+            keyword_candidates = [
+                thread for thread in candidates if _thread_keyword_match(thread, text, keywords)
+            ]
+            pool = keyword_candidates or [
+                thread
+                for thread in candidates
+                if str(message.get("sender", "")) in thread.participants
+            ]
+            if pool:
+                target = max(pool, key=lambda thread: thread.last_activity)
 
     # 4. New conversation.
-    return _new_thread(state, message, config, now, keywords)
+    if target is None:
+        return _new_thread(state, message, config, now, keywords)
+
+    if target.ended:
+        target.ended = False  # a reply can revive a thread that just went quiet
+    add_message_to_thread(target, message, config, now, keywords)
+    return target
 
 
 def refresh_activities(state: "GroupState", config: "PluginConfig", now: float) -> None:

@@ -3,7 +3,7 @@
 > 插件名：`astrbot_plugin_whale_social`
 > 上游计划：[`astrbot_plugin_whale_social_PLAN.md`](./astrbot_plugin_whale_social_PLAN.md)（V1 + 全部 P0 修正）
 > 本文目标：解决 QQ 群聊“多用户、多话题、消息高频”下，模型该**参与哪个会话**的问题。
-> 状态：**计划（未实现）**。已在 V0.1.1 落地的基础：UMO 状态、单群 `pending`、冷却/回应窗口、令牌桶/退避。
+> 状态：**V2.0 已实现（`0.2.0`）**。V0.1.1 已落地的基础：UMO 状态、单群 `pending`、冷却/回应窗口、令牌桶/退避。V2.0 在其上加入会话线程、防抖与群级决策；V2.1/V2.2 仍为计划。
 
 ---
 
@@ -326,11 +326,11 @@ activity_score = 近期消息数 × 参与者数权重 × 时间衰减
 | key | type | default | 说明 |
 |---|---|---|---|
 | `debounce_seconds` | int | 3 | 群聊静默多久后触发一次决策 |
-| `debounce_max_wait_seconds` | int | 10 | 高速群聊下强制决策的最长等待 |
+| `debounce_max_wait_seconds` | int | 8 | 高速群聊下强制决策的最长等待 |
 | `thread_window_seconds` | int | 180 | 线程多久无活动视为结束 |
 | `thread_join_time_gap_seconds` | int | 120 | 新消息并入现有线程的最大时间间隔 |
-| `max_threads` | int | 5 | 每群最多保留的活跃线程数 |
-| `min_thread_messages` | int | 2 | 线程至少多少条消息才考虑参与 |
+| `max_threads` | int | 3 | 每群最多保留的活跃线程数 |
+| `min_thread_messages` | int | 1 | 线程至少多少条消息才考虑参与（默认 1：单条强兴趣消息也可参与） |
 | `thread_selection` | string | `"most_active"` | 线程选择策略：`most_active` / `interest` |
 | `reply_mention_user` | bool | false | `target: USER` 时是否带 @（默认关闭） |
 | `extract_message_segments` | bool | true | 是否解析 At / Reply 结构（失败自动降级） |
@@ -392,15 +392,15 @@ tests/
 
 ## 15. 里程碑
 
-### V2.0（本次计划核心）
+### V2.0（本次计划核心）—— 已实现
 
-- [ ] 消息段解析（Text / At / Reply）
-- [ ] `ConversationThread` + V1 启发式聚类 + 活跃度 + 淘汰
-- [ ] 每群 Debounce（静默 + max_wait）
-- [ ] 单群 decision loop（debounce → select → decide → send）+ `revision`/reservation
-- [ ] 决策 JSON v2（`thread_id` / `target`）与降级
-- [ ] `target: USER` 可选 @（默认关闭）
-- [ ] 记忆回写适配线程
+- [x] 消息段解析（Text / At / Reply）
+- [x] `ConversationThread` + V1 启发式聚类 + 活跃度 + 淘汰
+- [x] 每群 Debounce（静默 + max_wait）
+- [x] 单群 decision loop（debounce → select → decide → send）+ `revision`（发送前复检；锁内 reservation 仍为 V2.1 项）
+- [x] 决策 JSON v2（`thread_id` / `target`）与降级
+- [x] `target: USER` 可选 @（默认关闭）
+- [x] 记忆回写适配线程
 
 ### V2.1
 
@@ -416,23 +416,23 @@ tests/
 
 ---
 
-## 16. 待办 Checklist
+## 16. 待办 Checklist（V2.0）
 
-- [ ] 核实 AstrBot 消息段 API（At / Reply 的组件类与字段）
-- [ ] 设计 `ChatMessage.meta`（reply_to / at_users）并保持向后兼容
-- [ ] 实现 `core/threads.py`（纯函数 + 可测）
-- [ ] 实现 `core/debounce.py`（注入 clock/sleep）
-- [ ] 改造 `core/engine.py` 为 debounce 驱动的单群循环
-- [ ] 扩展 `core/decision.py` v2 契约
-- [ ] 增补配置项与 `_conf_schema.json`
-- [ ] 单测 + 场景验收（含高频群聊压测）
+- [x] 核实 AstrBot 消息段 API（At / Reply 的组件类与字段）
+- [x] 设计 `ChatMessage.meta`（reply_to / at_users）并保持向后兼容
+- [x] 实现 `core/threads.py`（纯函数 + 可测）
+- [x] 实现 `core/debounce.py`（注入 clock/sleep）
+- [x] 改造 `core/engine.py` 为 debounce 驱动的单群循环
+- [x] 扩展 `core/decision.py` v2 契约
+- [x] 增补配置项与 `_conf_schema.json`
+- [x] 单测 + 场景验收（含高频群聊压测）
 
 ---
 
 ## 17. 开放问题
 
-1. `target: USER` 是否默认带 `@`？（当前默认关闭，需产品确认）
-2. 线程聚类在无引用关系平台上的精度上限；是否 V2.0 就引入轻量 embedding？
-3. `revision` 与 `pending` 的合并方案（上游 P0-10）是否与 Debounce 一并落地？
-4. 多话题并存时，是否需要“本轮最多参与 1 个线程”的硬约束（当前建议：是）。
-5. 是否需要在 WebUI 暴露“当前线程视图”用于运营观察（脱敏）。
+1. `target: USER` 是否默认带 `@`？——**已决定：默认关闭**（`reply_mention_user=false`），可在 WebUI 开启。
+2. 线程聚类在无引用关系平台上的精度上限；是否 V2.0 就引入轻量 embedding？——**V2.0 先用启发式**，embedding 留待 V2.1。
+3. `revision` 与 `pending` 的合并方案（上游 P0-10）是否与 Debounce 一并落地？——**V2.0 用 `pending` + 发送前复检**；锁内唯一 reservation 留待 V2.1。
+4. 多话题并存时，是否需要“本轮最多参与 1 个线程”的硬约束（当前建议：是）。——**已实现**：每次只选一个线程。
+5. 是否需要在 WebUI 暴露“当前线程视图”用于运营观察（脱敏）。——**暂以 `/ws status|why` 文本呈现**，WebUI 视图留待 V2.2。

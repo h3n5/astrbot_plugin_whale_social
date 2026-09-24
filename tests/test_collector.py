@@ -111,3 +111,33 @@ def test_build_context_marks_bot_messages():
     context = collector.build_context(state)
     assert "alice" in context
     assert "[鲸鱼娘]" in context
+
+
+def test_record_keeps_reply_and_at_metadata():
+    collector = _collector()
+    state = GroupState()
+    payload = collector.record(
+        state,
+        message_id="m1",
+        sender="u",
+        text="hi",
+        is_bot=False,
+        kind="text",
+        now=1.0,
+        reply_to="p1",
+        at_users=["42", "43"],
+    )
+    assert payload is not None
+    assert payload["reply_to"] == "p1"
+    assert payload["at_users"] == ["42", "43"]
+    assert state.messages[-1] is payload
+
+
+def test_format_messages_handles_empty_and_non_text():
+    collector = _collector()
+    assert collector.format_messages([]) == ""
+    rendered = collector.format_messages(
+        [{"sender": "u", "text": "", "kind": "image", "timestamp": 0.0}]
+    )
+    assert "[image]" in rendered
+

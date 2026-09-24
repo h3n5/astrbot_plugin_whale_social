@@ -167,6 +167,70 @@
     "default": "08:00-23:59",
     "hint": "格式 HH:MM-HH:MM（本地时间），超出时段不主动。支持跨午夜，如 22:00-06:00。"
   },
+  "debounce_seconds": {
+    "description": "群聊防抖静默时长",
+    "type": "float",
+    "default": 3,
+    "hint": "新消息会把决策推迟这么久，等群聊稳定后再判断。",
+    "slider": {
+      "min": 0,
+      "max": 30,
+      "step": 0.5
+    }
+  },
+  "debounce_max_wait_seconds": {
+    "description": "防抖最长等待",
+    "type": "float",
+    "default": 8,
+    "hint": "持续刷屏时最多等待多久就必须做一次判断；0 表示不限制。",
+    "slider": {
+      "min": 0,
+      "max": 60,
+      "step": 1
+    }
+  },
+  "thread_window_seconds": {
+    "description": "会话活跃窗口",
+    "type": "int",
+    "default": 180,
+    "hint": "超过该时长无新消息的会话视为结束。"
+  },
+  "thread_join_time_gap_seconds": {
+    "description": "会话合并时间间隔",
+    "type": "int",
+    "default": 120,
+    "hint": "两条消息间隔超过该秒数且无引用/@关系时，不再并入同一会话。"
+  },
+  "max_threads": {
+    "description": "最多并行会话数",
+    "type": "int",
+    "default": 3,
+    "hint": "每个群同时追踪的会话上限，超出时结束活跃度最低的会话。"
+  },
+  "min_thread_messages": {
+    "description": "会话最少消息数",
+    "type": "int",
+    "default": 1,
+    "hint": "低于该条数的会话不会触发主动参与。"
+  },
+  "thread_selection": {
+    "description": "会话选择策略",
+    "type": "string",
+    "default": "most_active",
+    "hint": "most_active 选最活跃会话；interest 优先选命中兴趣关键词的会话。"
+  },
+  "reply_mention_user": {
+    "description": "回应单人时 @ 对方",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，决策 target 为 USER 时会 @ 该群友；默认关闭以免打扰。"
+  },
+  "extract_message_segments": {
+    "description": "解析引用/@消息段",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后会把引用关系与 @ 对象用于会话归并；无法识别时自动忽略。"
+  },
   "provider_id": {
     "description": "主动社交使用的模型",
     "type": "string",

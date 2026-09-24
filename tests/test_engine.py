@@ -32,6 +32,9 @@ def make_config(**overrides) -> PluginConfig:
         min_cooldown_seconds=10.0,
         max_cooldown_seconds=10.0,
         reply_window_seconds=30.0,
+        debounce_seconds=0.01,
+        debounce_max_wait_seconds=0.02,
+        min_thread_messages=1,
     )
     base.update(overrides)
     return PluginConfig(**base)
@@ -48,13 +51,16 @@ def make_engine(
     sleep=None,
     writeback=None,
     send_result=True,
+    llm_calls=None,
 ):
     async def llm_decide(umo, system_prompt, prompt):
+        if llm_calls is not None:
+            llm_calls.append(prompt)
         return decision
 
-    async def send_message(umo, text):
+    async def send_message(umo, text, mention_user_id=None):
         if sent is not None:
-            sent.append((umo, text))
+            sent.append((umo, text, mention_user_id))
         return send_result
 
     async def default_writeback(umo, user_text, assistant_text):
@@ -86,7 +92,7 @@ def test_speak_sends_schedules_and_writes_back():
         return engine, sent, writebacks
 
     engine, sent, writebacks = asyncio.run(scenario())
-    assert sent == [(UMO, "带我一个")]
+    assert sent == [(UMO, "带我一个", None)]
     state = engine.get_state(UMO)
     assert state.consecutive_bot_messages == 1
     assert state.proactive_sent_today == 1
@@ -292,7 +298,7 @@ def test_failed_writeback_does_not_break_send():
         await engine.wait_idle()
         return sent
 
-    assert asyncio.run(scenario()) == [(UMO, "hi")]
+    assert asyncio.run(scenario()) == [(UMO, "hi", None)]
 
 
 def test_disallowed_group_is_ignored():
@@ -358,7 +364,7 @@ def test_send_failure_sets_backoff_and_does_not_count():
         return engine, sent
 
     engine, sent = asyncio.run(scenario())
-    assert sent == [(UMO, "hi")]  # send was attempted
+    assert sent == [(UMO, "hi", None)]  # send was attempted
     state = engine.get_state(UMO)
     assert state.failure_count == 1
     assert state.send_blocked_until == 1100.0
@@ -398,3 +404,132 @@ def test_global_flow_state_roundtrips_through_engine():
     exported = engine.export_global()
     assert exported["proactive_sent_today"] == 4
     assert exported["daily_reset_date"] == "2026-01-01"
+
+
+def test_debounce_coalesces_burst_into_single_decision():
+    async def scenario():
+        sent, llm_calls = [], []
+        engine = make_engine(
+            make_config(),
+            json.dumps({"action": "SPEAK", "reply": "hi"}),
+            sent=sent,
+            rng=FakeRng(uniform_value=10.0),
+            llm_calls=llm_calls,
+        )
+        for index in range(4):
+            await engine.handle_message(
+                UMO, message_id=f"m{index}", sender="u1", text="今晚打副本", is_bot=False
+            )
+        await engine.wait_idle()
+        return engine, sent, llm_calls
+
+    engine, sent, llm_calls = asyncio.run(scenario())
+    assert len(llm_calls) == 1
+    assert len(sent) == 1
+    threads = engine.get_state(UMO).threads
+    assert len(threads) == 1
+    assert len(threads[0].messages) == 4
+
+
+def test_prompt_includes_selected_thread_id():
+    async def scenario():
+        llm_calls = []
+        engine = make_engine(
+            make_config(),
+            json.dumps({"action": "SPEAK", "reply": "hi"}),
+            rng=FakeRng(uniform_value=10.0),
+            llm_calls=llm_calls,
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本", is_bot=False
+        )
+        await engine.wait_idle()
+        return llm_calls
+
+    llm_calls = asyncio.run(scenario())
+    assert llm_calls and "t1" in llm_calls[0]
+
+
+def test_target_user_mention_sent_when_enabled():
+    async def scenario():
+        sent = []
+        engine = make_engine(
+            make_config(reply_mention_user=True),
+            json.dumps(
+                {"action": "SPEAK", "target": {"type": "USER", "user_id": "u1"}, "reply": "hi"}
+            ),
+            sent=sent,
+            rng=FakeRng(uniform_value=10.0),
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本", is_bot=False
+        )
+        await engine.wait_idle()
+        return sent
+
+    assert asyncio.run(scenario()) == [(UMO, "hi", "u1")]
+
+
+def test_target_user_mention_disabled_by_default():
+    async def scenario():
+        sent = []
+        engine = make_engine(
+            make_config(),
+            json.dumps(
+                {"action": "SPEAK", "target": {"type": "USER", "user_id": "u1"}, "reply": "hi"}
+            ),
+            sent=sent,
+            rng=FakeRng(uniform_value=10.0),
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本", is_bot=False
+        )
+        await engine.wait_idle()
+        return sent
+
+    assert asyncio.run(scenario()) == [(UMO, "hi", None)]
+
+
+def test_bad_thread_id_downgrades_to_no_reply():
+    async def scenario():
+        sent = []
+        engine = make_engine(
+            make_config(),
+            json.dumps({"action": "SPEAK", "thread_id": "ghost", "reply": "hi"}),
+            sent=sent,
+            rng=FakeRng(uniform_value=10.0),
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本", is_bot=False
+        )
+        await engine.wait_idle()
+        return engine, sent
+
+    engine, sent = asyncio.run(scenario())
+    assert sent == []
+    assert engine.last_decision[UMO] == "bad_thread"
+
+
+def test_bot_reply_attaches_to_selected_thread():
+    async def scenario():
+        engine = make_engine(
+            make_config(),
+            json.dumps({"action": "SPEAK", "reply": "hi"}),
+            rng=FakeRng(uniform_value=10.0),
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本", is_bot=False
+        )
+        await engine.wait_idle()
+        await engine.handle_message(
+            UMO, message_id="2", sender="9999", text="来了", is_bot=True
+        )
+        return engine
+
+    engine = asyncio.run(scenario())
+    threads = engine.get_state(UMO).threads
+    assert len(threads) == 1
+    assert threads[0].bot_participated is True
+    assert any(item.get("is_bot") for item in threads[0].messages)
+    assert "9999" not in threads[0].participants
+

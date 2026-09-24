@@ -3,6 +3,7 @@
 from core.config import PluginConfig
 from core.models import ChatMessage, GroupState
 from core.threads import (
+    THREAD_MESSAGE_LIMIT,
     ConversationThread,
     assign_thread,
     find_thread,
@@ -58,6 +59,10 @@ def test_keyword_overlap_joins_thread():
     second = assign_thread(state, msg("2", "u2", "副本我可以", 1010.0), config, 1010.0)
     assert second is first
     assert len(state.threads) == 1
+    assert [item["message_id"] for item in first.messages] == ["1", "2"]
+    assert first.participants == ["u1", "u2"]
+    assert first.last_activity == 1010.0
+    assert first.activity_score > 0
 
 
 def test_different_topics_get_separate_threads():
@@ -75,6 +80,7 @@ def test_participant_continuation_joins_thread():
     second = assign_thread(state, msg("2", "u1", "是啊真舒服", 1005.0), config, 1005.0)
     assert second is first
     assert len(state.threads) == 1
+    assert len(first.messages) == 2
 
 
 def test_reply_relation_joins_thread():
@@ -86,6 +92,7 @@ def test_reply_relation_joins_thread():
     )
     assert joined is first
     assert len(state.threads) == 1
+    assert len(first.messages) == 2
 
 
 def test_at_relation_joins_targets_thread():
@@ -97,6 +104,20 @@ def test_at_relation_joins_targets_thread():
         state, msg("3", "u3", "带我一个", 1010.0, at_users=["u1"]), config, 1010.0
     )
     assert joined is a
+    assert len(a.messages) == 2
+
+
+def test_reply_revives_quiet_thread():
+    state = GroupState()
+    config = make_config()
+    thread = assign_thread(state, msg("1", "u1", "今晚打副本吗", 1000.0), config, 1000.0)
+    thread.ended = True
+    revived = assign_thread(
+        state, msg("2", "u2", "我也去", 1010.0, reply_to="1"), config, 1010.0
+    )
+    assert revived is thread
+    assert thread.ended is False
+    assert thread_is_active(thread, config, 1010.0)
 
 
 def test_prune_ends_stale_threads():
@@ -193,6 +214,20 @@ def test_format_overview_excludes_selected():
     overview = format_overview(state, config, 1000.0, exclude_id="a")
     assert "b" in overview
     assert "\na" not in overview
+
+
+def test_thread_messages_are_bounded():
+    state = GroupState()
+    config = make_config()
+    for index in range(THREAD_MESSAGE_LIMIT + 10):
+        assign_thread(
+            state,
+            msg(f"m{index}", "u1", "副本", 1000.0 + index * 0.1),
+            config,
+            1000.0 + index * 0.1,
+        )
+    assert len(state.threads) == 1
+    assert len(state.threads[0].messages) == THREAD_MESSAGE_LIMIT
 
 
 def test_find_and_last_human_helpers():

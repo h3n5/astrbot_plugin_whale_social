@@ -73,3 +73,49 @@ def test_decision_prompt_includes_context_and_hint():
     assert "alice" in prompt
     assert "hi" in prompt
     assert "dynamic_context" in prompt
+
+
+def test_parses_v2_thread_and_target():
+    decision = parse_decision(
+        '{"action":"SPEAK","thread_id":"t2","target":{"type":"user","user_id":"42"},'
+        '"reply":"来"}'
+    )
+    assert decision is not None
+    assert decision.thread_id == "t2"
+    assert decision.target_type == "USER"
+    assert decision.target_user_id == "42"
+
+
+def test_group_target_drops_user_id():
+    decision = parse_decision(
+        '{"action":"SPEAK","target":{"type":"GROUP","user_id":"42"},"reply":"x"}'
+    )
+    assert decision is not None
+    assert decision.target_type == "GROUP"
+    assert decision.target_user_id == ""
+
+
+def test_invalid_target_type_downgrades_to_group():
+    decision = parse_decision('{"action":"SPEAK","target":{"type":"CHANNEL"},"reply":"x"}')
+    assert decision is not None
+    assert decision.target_type == "GROUP"
+
+
+def test_missing_v2_fields_default():
+    decision = parse_decision('{"action":"IGNORE"}')
+    assert decision is not None
+    assert decision.thread_id == ""
+    assert decision.target_type == "GROUP"
+    assert decision.target_user_id == ""
+
+
+def test_decision_prompt_includes_thread_info():
+    prompt = build_decision_prompt(
+        context_text="ctx",
+        trigger_text="hi",
+        thread_id="t1",
+        threads_overview="- t2｜话题：抽卡",
+    )
+    assert "t1" in prompt
+    assert "t2" in prompt
+
