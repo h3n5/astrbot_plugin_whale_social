@@ -18,16 +18,23 @@ class StateStore:
         self.path = Path(path)
         self.schema_version = schema_version
 
-    def load(self) -> dict[str, dict[str, Any]]:
+    def _read_payload(self) -> Optional[dict[str, Any]]:
+        """Read and validate the file once; ``None`` when absent/corrupt/stale."""
         if not self.path.exists():
-            return {}
+            return None
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return {}
+            return None
         if not isinstance(raw, dict):
-            return {}
+            return None
         if raw.get("schema_version") != self.schema_version:
+            return None
+        return raw
+
+    def load(self) -> dict[str, dict[str, Any]]:
+        raw = self._read_payload()
+        if raw is None:
             return {}
         states = raw.get("states")
         if not isinstance(states, dict):
@@ -39,15 +46,8 @@ class StateStore:
         }
 
     def load_global(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return {}
-        try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
-        if not isinstance(raw, dict):
-            return {}
-        if raw.get("schema_version") != self.schema_version:
+        raw = self._read_payload()
+        if raw is None:
             return {}
         payload = raw.get("global")
         return dict(payload) if isinstance(payload, dict) else {}
