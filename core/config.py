@@ -170,6 +170,16 @@ class PluginConfig:
     max_group_states: int = 100
     state_ttl_seconds: int = 604800
     active_hours: str = "08:00-23:59"
+    # V2.0: conversation threads + debounce.
+    debounce_seconds: float = 3.0
+    debounce_max_wait_seconds: float = 8.0
+    thread_window_seconds: float = 180.0
+    thread_join_time_gap_seconds: float = 120.0
+    max_threads: int = 3
+    min_thread_messages: int = 1
+    thread_selection: str = "most_active"
+    reply_mention_user: bool = False
+    extract_message_segments: bool = True
     provider_id: str = ""
     interest_keywords: str = DEFAULT_INTEREST_KEYWORDS
     negative_keywords: str = ""
@@ -209,6 +219,15 @@ class PluginConfig:
             max_group_states=_as_int(_get(mapping, "max_group_states", 100), 100),
             state_ttl_seconds=_as_int(_get(mapping, "state_ttl_seconds", 604800), 604800),
             active_hours=_as_str(_get(mapping, "active_hours", "08:00-23:59"), "08:00-23:59"),
+            debounce_seconds=_as_float(_get(mapping, "debounce_seconds", 3), 3.0),
+            debounce_max_wait_seconds=_as_float(_get(mapping, "debounce_max_wait_seconds", 8), 8.0),
+            thread_window_seconds=_as_float(_get(mapping, "thread_window_seconds", 180), 180.0),
+            thread_join_time_gap_seconds=_as_float(_get(mapping, "thread_join_time_gap_seconds", 120), 120.0),
+            max_threads=_as_int(_get(mapping, "max_threads", 3), 3),
+            min_thread_messages=_as_int(_get(mapping, "min_thread_messages", 1), 1),
+            thread_selection=_as_str(_get(mapping, "thread_selection", "most_active"), "most_active"),
+            reply_mention_user=_as_bool(_get(mapping, "reply_mention_user", False), False),
+            extract_message_segments=_as_bool(_get(mapping, "extract_message_segments", True), True),
             provider_id=_as_str(_get(mapping, "provider_id", ""), ""),
             interest_keywords=_as_str(_get(mapping, "interest_keywords", DEFAULT_INTEREST_KEYWORDS), DEFAULT_INTEREST_KEYWORDS),
             negative_keywords=_as_str(_get(mapping, "negative_keywords", ""), ""),

@@ -22,6 +22,8 @@ class ChatMessage:
     timestamp: float
     is_bot: bool = False
     kind: str = "text"
+    reply_to: str = ""
+    at_users: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -31,10 +33,17 @@ class ChatMessage:
             "timestamp": self.timestamp,
             "is_bot": self.is_bot,
             "kind": self.kind,
+            "reply_to": self.reply_to,
+            "at_users": list(self.at_users),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ChatMessage":
+        raw_at = data.get("at_users") or []
+        if isinstance(raw_at, (list, tuple, set)):
+            at_users = [str(item) for item in raw_at]
+        else:
+            at_users = []
         return cls(
             message_id=str(data.get("message_id", "")),
             sender=str(data.get("sender", "")),
@@ -42,6 +51,8 @@ class ChatMessage:
             timestamp=float(data.get("timestamp", 0.0) or 0.0),
             is_bot=bool(data.get("is_bot", False)),
             kind=str(data.get("kind", "text")),
+            reply_to=str(data.get("reply_to", "") or ""),
+            at_users=at_users,
         )
 
 
@@ -95,6 +106,12 @@ class GroupState:
     message_times: list[float] = field(default_factory=list)
     seen_message_ids: list[str] = field(default_factory=list)
     mentioned_until: float = 0.0
+    threads: list[Any] = field(default_factory=list)  # list[ConversationThread]
+    thread_seq: int = 0
+    revision: int = 0
+    debounce_deadline: float = 0.0
+    debounce_first_trigger: float = 0.0
+    selected_thread_id: str = ""
 
     def to_persist_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in _PERSISTED_FIELDS}
