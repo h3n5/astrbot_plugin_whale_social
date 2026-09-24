@@ -9,7 +9,7 @@ This repository contains the AstrBot plugin `astrbot_plugin_whale_social`:
   git-ignored and kept local only; do not commit it.
 - `docs/astrbot_plugin_whale_social_PLAN_v2.md` covers the conversation
   threads / debounce / group-level decision design.
-- `transcript.txt` preserves the source product discussion; treat it as
+- `docs/transcript.txt` preserves the source product discussion; treat it as
   reference material, not executable code.
 
 When implementation begins, follow the layout defined in the plan:
