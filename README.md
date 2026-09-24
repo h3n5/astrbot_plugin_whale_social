@@ -7,7 +7,7 @@
 本插件**只做主动层**：被 @ / 唤醒的消息一律交给 AstrBot 默认 agent，插件只观察、不回复、不拦截事件。主动发言只在**发送成功后**尝试写回 AstrBot 会话记忆，让后续正常回复也能看到它刚才说过的话。
 
 - 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
-- 当前版本：`0.2.0`
+- 当前版本：`0.2.1`
 - 设计文档：见 [`astrbot_plugin_whale_social_PLAN.md`](./astrbot_plugin_whale_social_PLAN.md)
 - V2 设计（会话线程 / Debounce / 群级决策）：见 [`astrbot_plugin_whale_social_PLAN_v2.md`](./astrbot_plugin_whale_social_PLAN_v2.md)（已在 `0.2.0` 落地）
 
@@ -20,6 +20,8 @@
 - **会话线程（V2）**：把群消息按「引用 → @ → 关键词 → 同人续聊 → 新会话」聚成会话，每次只挑一个最值得参与的会话，而不是逐条消息反应。
 - **防抖决策（V2）**：群聊刷屏时先静默等待稳定（`debounce_seconds`），最多等到 `debounce_max_wait_seconds`，避免在别人打字中途插话。
 - **群级决策（V2）**：LLM 输出 `thread_id` 与 `target`；`target.type=USER` 时可选 @ 对方（默认关闭）。
+- **重连去重（第一层基础设施）**：以 `umo:message_id` 为键、TTL + 容量上限的全局去重缓存，服务重连重放的事件在进入 Collector / 线程 / LLM 之前就被丢弃；无 ID 时的指纹兜底默认关闭，避免误伤连续相同发言。
+- **群级任务互斥**：一个群同一时刻只有一个 debounce 定时器 + 一个在途决策，重复事件不会产生第二个 LLM 任务或重复回复。
 - **分档冷却**：普通 / 刚参与 / 连续发言 / 上次被忽略，四档随机冷却，持久化到磁盘，重启后依然有效。
 - **回应窗口**：主动发言后开启窗口；有人接话即视为有效互动，窗口过期无人回应则标记“被忽略”，后续更沉默。
 - **活跃度反向调节**：群越刷屏，越不插话。
@@ -94,6 +96,9 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 | `thread_selection` | string | `most_active` | 会话选择策略：`most_active` / `interest` |
 | `reply_mention_user` | bool | `false` | `target.type=USER` 时是否 @ 对方 |
 | `extract_message_segments` | bool | `true` | 解析引用/@ 消息段用于会话归并 |
+| `dedup_ttl_seconds` | float | `300` | 同一 `message_id` 重复推送在该秒数内直接丢弃 |
+| `dedup_max_entries` | int | `10000` | 去重缓存容量上限；`0` = 不限制 |
+| `dedup_fallback_seconds` | float | `0` | 无 `message_id` 时的指纹兜底窗口；`0` = 关闭 |
 | `provider_id` | string | `""` | 留空使用当前会话模型 |
 | `interest_keywords` | text | 游戏/副本/… | 每行一个兴趣关键词 |
 | `negative_keywords` | text | `""` | 每行一个，命中则直接放弃本次参与 |
@@ -130,6 +135,8 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
    │                                  插件仅：提升能量、标记 @、开启冷却让位
    │
    └─ 普通消息
+        ▼
+   Dedup       umo:message_id 精确去重（TTL + 容量上限，第一关）
         ▼
    Collector   入窗 / message_id 去重 / 滑动速率 / 能量
         ▼
@@ -205,6 +212,7 @@ core/                   # 纯 Python 策略层（无 AstrBot 依赖）
   timeutil.py           # 时区与跨日 day key
   threads.py            # 会话聚类 / 活跃度 / 选择
   debounce.py           # 防抖截止时间策略
+  dedup.py              # 重连重放去重（TTL + 容量上限）
   decision.py           # Prompt 构建 + JSON 容错解析（V2: thread_id/target）
   reply.py              # 回复清洗 / 过滤 / 截断
   memory.py             # 群情 hint 与回写 payload
@@ -226,7 +234,7 @@ data/
 python -m pytest -q
 ```
 
-覆盖：冷却分档与持久化、回应窗口结算、去重、窗口截断、速率、SpeakScore、Gate 各分支、JSON 容错解析（含 V2 `thread_id`/`target`）、回复过滤、会话聚类与活跃度、防抖截止时间、原子写与版本守卫、以及引擎端到端（发言/忽略/被 @/dry_run/冷却/竞态取消/shutdown/防抖合并/线程选择/@ 目标）。
+覆盖：冷却分档与持久化、回应窗口结算、去重（含重连重放 TTL/容量/指纹）、窗口截断、速率、SpeakScore、Gate 各分支、JSON 容错解析（含 V2 `thread_id`/`target`）、回复过滤、会话聚类与活跃度、防抖截止时间、原子写与版本守卫、以及引擎端到端（发言/忽略/被 @/dry_run/冷却/竞态取消/shutdown/防抖合并/线程选择/@ 目标）。
 
 > 测试需要 `pytest`（仅开发依赖，插件运行本身无第三方依赖）。
 
@@ -234,7 +242,7 @@ python -m pytest -q
 
 ## 已知限制 / 路线图
 
-当前 `0.2.0` 已实现核心主动链路、全部 P0 修正、V1.1 的流控/韧性，以及 V2.0 的会话线程 / 防抖 / 群级决策；以下为尚未落地的部分：
+当前 `0.2.1` 已实现核心主动链路、全部 P0 修正、V1.1 的流控/韧性、V2.0 的会话线程 / 防抖 / 群级决策，以及重连重放的第一层去重；以下为尚未落地的部分：
 
 - `use_astrbot_memory`：配置项已预留，尚未读取 AstrBot 会话历史做额外上下文。
 - 决策与回复目前为**一次** LLM 调用（同一次 JSON 同时给出 `action`、`thread_id`、`target` 与 `reply`），计划中的“两阶段分离”尚未拆分。

@@ -6,6 +6,7 @@ unit-tested without a live bot.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -54,6 +55,51 @@ class ChatMessage:
             reply_to=str(data.get("reply_to", "") or ""),
             at_users=at_users,
         )
+
+
+@dataclass
+class MessageEnvelope:
+    """Adapter-neutral view of one observed event.
+
+    Built once at the edge of the engine so every downstream layer (dedup,
+    collector, threads) works from the same normalized fields instead of the
+    raw AstrBot event.
+    """
+
+    umo: str
+    message_id: str
+    sender: str
+    text: str
+    timestamp: float
+    is_bot: bool = False
+    kind: str = "text"
+    mentioned: bool = False
+    reply_to: str = ""
+    at_users: list[str] = field(default_factory=list)
+
+    def dedup_key(self) -> str:
+        """Stable exact key for reconnect-replay de-duplication.
+
+        Empty when the platform gave no ``message_id``; callers must then fall
+        back (or not de-duplicate at all) rather than let every id-less event
+        collide under one key.
+        """
+        mid = (self.message_id or "").strip()
+        if not mid:
+            return ""
+        return f"{self.umo}:{mid}"
+
+    def fingerprint(self, bucket_seconds: float) -> str:
+        """Coarse fallback key for id-less events (disabled when <= 0).
+
+        Only meant as an anomaly aid: without a real id, two genuine identical
+        messages in the same bucket are indistinguishable from one replay.
+        """
+        if bucket_seconds <= 0:
+            return ""
+        bucket = int(self.timestamp // bucket_seconds)
+        digest = hashlib.sha1((self.text or "").encode("utf-8")).hexdigest()[:12]
+        return f"fp:{self.umo}:{self.sender}:{digest}:{bucket}"
 
 
 # Fields that survive a restart. The message window and rate buckets are

@@ -281,6 +281,9 @@ class WhaleSocialPlugin(Star):
         lines.append(
             f"全局今日主动：{global_state.proactive_sent_today}/{self.cfg.global_daily_proactive_cap}"
         )
+        lines.append(f"任务阶段：{self.engine.phase(umo)}")
+        dedup = self.engine.deduplicator.stats()
+        lines.append(f"去重缓存：{dedup['size']} 条（累计丢弃重复 {dedup['duplicates']} 条）")
         yield event.plain_result("\n".join(lines))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -328,6 +331,7 @@ class WhaleSocialPlugin(Star):
             thread_lines = f"\n活跃会话：\n{thread_lines}"
         yield event.plain_result(
             f"上次决策：{decision}\n"
+            f"任务阶段：{self.engine.phase(umo)}\n"
             f"冷却：{'进行中' if state.next_speak_after > time.time() else '已就绪'}\n"
             f"{backoff}"
             f"连续机器人发言：{state.consecutive_bot_messages}\n"

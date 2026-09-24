@@ -231,6 +231,34 @@
     "default": true,
     "hint": "开启后会把引用关系与 @ 对象用于会话归并；无法识别时自动忽略。"
   },
+  "dedup_ttl_seconds": {
+    "description": "消息去重缓存时长",
+    "type": "float",
+    "default": 300,
+    "hint": "同一 message_id 在该秒数内重复推送会被直接丢弃；覆盖服务重连重放。",
+    "slider": {
+      "min": 30,
+      "max": 1800,
+      "step": 30
+    }
+  },
+  "dedup_max_entries": {
+    "description": "消息去重缓存上限",
+    "type": "int",
+    "default": 10000,
+    "hint": "最多保留多少条 message_id，超出按最早记录淘汰；0 表示不限制。"
+  },
+  "dedup_fallback_seconds": {
+    "description": "无 ID 兜底去重窗口",
+    "type": "float",
+    "default": 0,
+    "hint": "仅当消息没有 message_id 时生效；同一用户相同内容在该秒数内视为重复。默认 0 = 关闭（避免误伤连续相同发言）。",
+    "slider": {
+      "min": 0,
+      "max": 60,
+      "step": 5
+    }
+  },
   "provider_id": {
     "description": "主动社交使用的模型",
     "type": "string",

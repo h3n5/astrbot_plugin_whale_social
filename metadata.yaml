@@ -9,7 +9,7 @@ desc: |
 
   安全默认：群白名单默认关闭，必须显式逐群开启；被 @ 的消息交给 AstrBot
   默认 agent，本插件只观察、不回复、不停止事件传播。
-version: 0.2.0
+version: 0.2.1
 author: mind-melt
 repo: https://github.com/your-name/astrbot_plugin_whale_social
 astrbot_version: ">=4.5.7,<5"

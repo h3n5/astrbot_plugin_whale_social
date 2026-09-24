@@ -533,3 +533,72 @@ def test_bot_reply_attaches_to_selected_thread():
     assert any(item.get("is_bot") for item in threads[0].messages)
     assert "9999" not in threads[0].participants
 
+
+def test_reconnect_replay_deduped_beyond_collector_backlog():
+    async def scenario():
+        engine = make_engine(
+            make_config(),
+            json.dumps({"action": "IGNORE"}),
+        )
+        for index in range(250):
+            await engine.handle_message(
+                UMO, message_id=f"m{index}", sender="u1", text="打副本", is_bot=False
+            )
+        # Replay the very first event; collector's 200-entry backstop has already
+        # evicted it, so only the global TTL deduplicator can catch it.
+        await engine.handle_message(
+            UMO, message_id="m0", sender="u1", text="打副本", is_bot=False
+        )
+        return engine
+
+    engine = asyncio.run(scenario())
+    assert engine.deduplicator.duplicates == 1
+
+
+def test_idless_messages_are_not_deduped_by_default():
+    async def scenario():
+        engine = make_engine(make_config(), json.dumps({"action": "IGNORE"}))
+        for _ in range(2):
+            await engine.handle_message(
+                UMO, message_id="", sender="u1", text="哈哈", is_bot=False
+            )
+        return engine
+
+    engine = asyncio.run(scenario())
+    assert len(engine.get_state(UMO).messages) == 2
+    assert engine.deduplicator.duplicates == 0
+
+
+def test_idless_fallback_dedups_when_enabled():
+    async def scenario():
+        engine = make_engine(
+            make_config(dedup_fallback_seconds=10.0),
+            json.dumps({"action": "IGNORE"}),
+        )
+        for _ in range(2):
+            await engine.handle_message(
+                UMO, message_id="", sender="u1", text="哈哈", is_bot=False
+            )
+        return engine
+
+    engine = asyncio.run(scenario())
+    assert len(engine.get_state(UMO).messages) == 1
+    assert engine.deduplicator.duplicates == 1
+
+
+def test_phase_reports_idle_then_waiting():
+    async def scenario():
+        engine = make_engine(make_config(), json.dumps({"action": "IGNORE"}))
+        assert engine.phase(UMO) == "idle"
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="打副本", is_bot=False
+        )
+        waiting = engine.phase(UMO)
+        await engine.wait_idle()
+        return engine, waiting
+
+    engine, waiting = asyncio.run(scenario())
+    assert waiting == "waiting"
+    assert engine.phase(UMO) == "idle"
+
+

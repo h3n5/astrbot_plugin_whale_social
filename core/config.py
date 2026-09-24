@@ -184,6 +184,10 @@ class PluginConfig:
     thread_selection: str = "most_active"
     reply_mention_user: bool = False
     extract_message_segments: bool = True
+    # V2.0: reconnect-replay de-duplication.
+    dedup_ttl_seconds: float = 300.0
+    dedup_max_entries: int = 10000
+    dedup_fallback_seconds: float = 0.0
     provider_id: str = ""
     interest_keywords: str = DEFAULT_INTEREST_KEYWORDS
     negative_keywords: str = ""
@@ -232,6 +236,9 @@ class PluginConfig:
             thread_selection=_as_str(_get(mapping, "thread_selection", "most_active"), "most_active"),
             reply_mention_user=_as_bool(_get(mapping, "reply_mention_user", False), False),
             extract_message_segments=_as_bool(_get(mapping, "extract_message_segments", True), True),
+            dedup_ttl_seconds=_as_float(_get(mapping, "dedup_ttl_seconds", 300), 300.0),
+            dedup_max_entries=_as_int(_get(mapping, "dedup_max_entries", 10000), 10000),
+            dedup_fallback_seconds=_as_float(_get(mapping, "dedup_fallback_seconds", 0), 0.0),
             provider_id=_as_str(_get(mapping, "provider_id", ""), ""),
             interest_keywords=_as_str(_get(mapping, "interest_keywords", DEFAULT_INTEREST_KEYWORDS), DEFAULT_INTEREST_KEYWORDS),
             negative_keywords=_as_str(_get(mapping, "negative_keywords", ""), ""),

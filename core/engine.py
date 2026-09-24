@@ -23,10 +23,11 @@ from core.config import PluginConfig
 from core.cooldown import in_cooldown, settle_reply_window
 from core.debounce import DebounceTracker
 from core.decision import build_decision_prompt, build_system_prompt, parse_decision
+from core.dedup import MessageDeduplicator
 from core.flow import FlowController
 from core.gate import check_gate
 from core.memory import build_group_hint
-from core.models import GroupState
+from core.models import GroupState, MessageEnvelope
 from core.reply import sanitize_reply
 from core.scorer import compute_score
 from core.threads import (
@@ -87,6 +88,10 @@ class SocialEngine:
         self.states: dict[str, GroupState] = {}
         self.collector = MessageCollector(config)
         self.flow = FlowController(config)
+        self.deduplicator = MessageDeduplicator(
+            ttl_seconds=config.dedup_ttl_seconds,
+            max_entries=config.dedup_max_entries,
+        )
         self.pending: dict[str, asyncio.Task[None]] = {}
         self.debounce_tasks: dict[str, asyncio.Task[None]] = {}
         self.last_decision: dict[str, str] = {}
@@ -217,11 +222,30 @@ class SocialEngine:
         reply_to: str = "",
         at_users: Optional[list[str]] = None,
     ) -> None:
-        """Observe one message. Never raises; never replies to a mention."""
+        """Observe one message. Never raises; never replies to a mention.
+
+        The first gate is reconnect-replay de-duplication: a repeated event
+        must not reach the collector, threads or the LLM.
+        """
         if not self.config.enabled or not self.is_allowed_group(umo):
             return
 
         now = self.clock()
+        envelope = MessageEnvelope(
+            umo=umo,
+            message_id=message_id,
+            sender=sender,
+            text=text,
+            timestamp=now,
+            is_bot=is_bot,
+            kind=kind,
+            mentioned=mentioned,
+            reply_to=reply_to,
+            at_users=list(at_users or []),
+        )
+        if self._is_duplicate(envelope, now):
+            return
+
         state = self.get_state(umo)
         self._ensure_daily_reset(state, now)
         settle_reply_window(state, now)
@@ -274,6 +298,16 @@ class SocialEngine:
 
         self._arm_debounce(umo, now)
         self._notify()
+
+    def _is_duplicate(self, envelope: MessageEnvelope, now: float) -> bool:
+        key = envelope.dedup_key()
+        if key:
+            return self.deduplicator.check_and_add(key, now)
+        # No stable id: only use the coarse fingerprint when explicitly enabled.
+        fingerprint = envelope.fingerprint(self.config.dedup_fallback_seconds)
+        if fingerprint:
+            return self.deduplicator.check_and_add(fingerprint, now)
+        return False
 
     def _track_thread(
         self,
@@ -506,6 +540,22 @@ class SocialEngine:
         return decision.target_user_id
 
     # -- lifecycle -------------------------------------------------------
+
+    def phase(self, umo: str) -> str:
+        """Coarse task state for observability: idle/waiting/sending/cooldown.
+
+        Mirrors the NONE -> WAITING -> THINKING/SENDING -> COOLDOWN machine;
+        ``pending`` covers both thinking and sending because the engine holds a
+        single in-flight decision per group.
+        """
+        if umo in self.pending:
+            return "sending"
+        if umo in self.debounce_tasks:
+            return "waiting"
+        state = self.states.get(umo)
+        if state is not None and in_cooldown(state, self.clock()):
+            return "cooldown"
+        return "idle"
 
     async def wait_idle(self) -> None:
         for _ in range(1000):
