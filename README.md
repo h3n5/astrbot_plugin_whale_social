@@ -7,7 +7,7 @@
 本插件**只做主动层**：被 @ / 唤醒的消息一律交给 AstrBot 默认 agent，插件只观察、不回复、不拦截事件。主动发言只在**发送成功后**尝试写回 AstrBot 会话记忆，让后续正常回复也能看到它刚才说过的话。
 
 - 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
-- 当前版本：`0.2.4`
+- 当前版本：`0.2.5`
 - 设计文档（本地 `docs/`，不随仓库发布）：`docs/astrbot_plugin_whale_social_PLAN.md`、`docs/astrbot_plugin_whale_social_PLAN_v2.md`（V2 会话线程 / Debounce / 群级决策，已在 `0.2.1` 落地）
 
 ---
@@ -133,8 +133,9 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 | `use_astrbot_memory` | bool | `true` | 预留：读取 AstrBot 会话历史作为上下文（见「已知限制」） |
 | `memory_writeback` | bool | `true` | 主动发言成功后写回会话记忆 |
 | `inject_group_context` | bool | `true` | 正常 LLM 请求时注入简短群情 |
-| `persona_prompt` | text | 鲸鱼娘人格 | 只负责“她是谁 / 怎么说话” |
 | `decision_prompt` | text | `""` | 留空使用内置决策 Prompt；只负责“是否参与” |
+
+> **人格分离**：本插件不内置任何人格。主动回复的口吻自动跟随 AstrBot 当前生效的人格（会话服务配置 > 会话人格 > 默认人格）；在 AstrBot WebUI 里配置人格即可改变说话风格，`decision_prompt` 只决定“要不要参与、参与哪个话题”。
 
 ---
 

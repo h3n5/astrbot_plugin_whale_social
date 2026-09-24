@@ -9,18 +9,6 @@ DEFAULT_INTEREST_KEYWORDS = (
     "游戏\n副本\nBoss\n活动\n抽卡\n角色\n装备\n攻略\n剧情\n动漫\n老婆\n整活\n哈哈\n笑死"
 )
 
-DEFAULT_PERSONA_PROMPT = (
-    "你是鲸鱼娘，一个游戏群里的虚拟群友。\n\n"
-    "你喜欢游戏、动漫和群聊里的各种趣事。\n"
-    "你平时比较喜欢潜水，不会为了说话而说话。\n"
-    "看到自己感兴趣的话题时，会像普通群友一样自然参与。\n\n"
-    "你的回复应该简短、自然、口语化。\n"
-    "不要主动强调自己是 AI、机器人或程序。\n"
-    "不要解释自己的行为逻辑。\n"
-    "不要为了延续聊天而强行提问。\n"
-    "不要连续刷屏。"
-)
-
 DEFAULT_DECISION_PROMPT = """你是群聊机器人的“社交决策器”。
 
 你的任务不是回答问题，而是判断机器人现在是否应该主动参与群聊。
@@ -34,7 +22,7 @@ DEFAULT_DECISION_PROMPT = """你是群聊机器人的“社交决策器”。
 6. 普通无关闲聊选择 IGNORE。
 7. 话题有意思但不是自然插话时机时选择 WAIT。
 8. 只有真正适合插入时才 SPEAK。
-9. 回复要像普通群友，而不是客服。
+9. 回复要自然、口语化，不要像客服。
 10. 不要解释“为什么要回复”。
 11. 优先选择最值得参与的一个会话（thread_id），不要同时参与多个话题。
 12. target.type 默认 GROUP；只有确实是在回应某个具体群友时才用 USER，并在 user_id 填该群友 ID。
@@ -223,7 +211,6 @@ class PluginConfig:
     use_astrbot_memory: bool = True
     memory_writeback: bool = True
     inject_group_context: bool = True
-    persona_prompt: str = DEFAULT_PERSONA_PROMPT
     decision_prompt: str = ""
 
     @classmethod
@@ -278,7 +265,6 @@ class PluginConfig:
             use_astrbot_memory=_as_bool(_get(mapping, "use_astrbot_memory", True), True),
             memory_writeback=_as_bool(_get(mapping, "memory_writeback", True), True),
             inject_group_context=_as_bool(_get(mapping, "inject_group_context", True), True),
-            persona_prompt=_as_str(_get(mapping, "persona_prompt", DEFAULT_PERSONA_PROMPT), DEFAULT_PERSONA_PROMPT),
             decision_prompt=_as_str(_get(mapping, "decision_prompt", ""), ""),
         )
 

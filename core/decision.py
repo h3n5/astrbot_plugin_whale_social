@@ -114,11 +114,10 @@ def parse_decision(text: str) -> Optional[Decision]:
 
 
 def build_system_prompt(config: "PluginConfig") -> str:
-    base = (config.decision_prompt or "").strip() or DEFAULT_DECISION_PROMPT
-    persona = (config.persona_prompt or "").strip()
-    if persona:
-        return f"{base}\n\n人格参考（仅用于判断口吻，不要输出人格设定）：\n{persona}"
-    return base
+    """The decision system prompt. Persona is deliberately NOT part of it:
+    the plugin is persona-agnostic and the adapter (main.py) appends the
+    AstrBot persona as a tone reference."""
+    return (config.decision_prompt or "").strip() or DEFAULT_DECISION_PROMPT
 
 
 def build_decision_prompt(

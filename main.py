@@ -109,11 +109,55 @@ class WhaleSocialPlugin(Star):
         except Exception:
             return None
 
+    async def _resolve_persona_prompt(self, umo: str) -> str:
+        """The AstrBot persona prompt in effect for this chat.
+
+        The plugin owns no persona of its own; the proactive reply's tone
+        follows AstrBot's persona (session service config > conversation
+        persona > default persona). Best-effort: returns "" on any API
+        mismatch or failure so a decision never breaks over persona lookup.
+        """
+        try:
+            persona_manager = getattr(self.context, "persona_manager", None)
+            if persona_manager is None:
+                return ""
+            persona_id = ""
+            conversation_manager = self.context.conversation_manager
+            conversation_id = await conversation_manager.get_curr_conversation_id(umo)
+            conversation = await conversation_manager.get_conversation(umo, conversation_id)
+            conversation_persona_id = getattr(conversation, "persona_id", None)
+            resolved = await persona_manager.resolve_selected_persona(
+                umo=umo,
+                conversation_persona_id=conversation_persona_id,
+                platform_name=umo.split(":", 1)[0],
+            )
+            persona_id = resolved[0] if resolved else ""
+            persona = (
+                persona_manager.get_persona_v3_by_id(persona_id)
+                if persona_id and persona_id != "default"
+                else persona_manager.get_default_persona_v3(umo)
+            )
+            prompt = (
+                persona.get("prompt")
+                if isinstance(persona, dict)
+                else getattr(persona, "prompt", None)
+            )
+            return str(prompt or "").strip()
+        except Exception as exc:
+            logger.debug(f"[{PLUGIN_NAME}] persona lookup skipped: {exc}")
+            return ""
+
     async def _llm_decide(self, umo: str, system_prompt: str, prompt: str) -> Optional[str]:
         provider_id = await self._resolve_provider_id(umo)
         if not provider_id:
             logger.warning(f"[{PLUGIN_NAME}] no chat provider for {umo}")
             return None
+        persona = await self._resolve_persona_prompt(umo)
+        if persona:
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                f"人格参考（仅用于决定回复口吻，不要复述或输出人格设定）：\n{persona}"
+            )
         timeout = self.cfg.llm_timeout_seconds
 
         async def _generate(**kwargs: Any) -> Any:

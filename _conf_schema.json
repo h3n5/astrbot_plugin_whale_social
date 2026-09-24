@@ -331,16 +331,10 @@
     "default": true,
     "hint": "在正常 LLM 请求时注入简短群情，避免污染 system prompt。"
   },
-  "persona_prompt": {
-    "description": "鲸鱼娘社交人格",
-    "type": "text",
-    "default": "你是鲸鱼娘，一个游戏群里的虚拟群友。\n\n你喜欢游戏、动漫和群聊里的各种趣事。\n你平时比较喜欢潜水，不会为了说话而说话。\n看到自己感兴趣的话题时，会像普通群友一样自然参与。\n\n你的回复应该简短、自然、口语化。\n不要主动强调自己是 AI、机器人或程序。\n不要解释自己的行为逻辑。\n不要为了延续聊天而强行提问。\n不要连续刷屏。",
-    "hint": "控制鲸鱼娘的说话风格。"
-  },
   "decision_prompt": {
     "description": "社交决策 Prompt",
     "type": "text",
     "default": "",
-    "hint": "留空使用内置决策 Prompt。应与人格分离，只负责判断是否参与。"
+    "hint": "留空使用内置决策 Prompt。只负责判断是否参与；回复人格跟随 AstrBot 的人格设置，本插件不内置人格。"
   }
 }

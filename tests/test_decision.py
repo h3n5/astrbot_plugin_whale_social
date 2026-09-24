@@ -119,3 +119,15 @@ def test_decision_prompt_includes_thread_info():
     assert "t1" in prompt
     assert "t2" in prompt
 
+
+
+def test_system_prompt_is_persona_agnostic():
+    from core.config import DEFAULT_DECISION_PROMPT, PluginConfig
+    from core.decision import build_system_prompt
+
+    default_prompt = build_system_prompt(PluginConfig())
+    assert default_prompt == DEFAULT_DECISION_PROMPT
+    assert "人格" not in default_prompt
+
+    custom = build_system_prompt(PluginConfig(decision_prompt="自定义决策提示"))
+    assert custom == "自定义决策提示"
