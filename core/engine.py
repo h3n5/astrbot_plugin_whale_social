@@ -112,7 +112,9 @@ class SocialEngine:
         self.states[umo] = state
 
     def is_allowed_group(self, umo: str) -> bool:
-        return bool(self.config.enabled) and umo in set(self.config.group_allowlist)
+        # The allowlist is tiny; a plain membership check beats building a set
+        # on every observed message.
+        return bool(self.config.enabled) and umo in self.config.group_allowlist
 
     def enable_group(self, umo: str) -> bool:
         if umo in self.config.group_allowlist:
@@ -132,6 +134,7 @@ class SocialEngine:
         self._cancel_group_tasks(umo)
         if umo in self.states:
             del self.states[umo]
+        self.last_decision.pop(umo, None)
         self._notify()
 
     def export_persist(self) -> dict[str, dict[str, Any]]:
@@ -179,6 +182,8 @@ class SocialEngine:
                 del self.states[umo]
                 removed.append(umo)
         if removed:
+            for umo in removed:
+                self.last_decision.pop(umo, None)
             self._notify()
         return removed
 
@@ -445,6 +450,10 @@ class SocialEngine:
         """Group has settled: pick one thread and maybe start a decision."""
         if self._closed:
             return
+        if umo in self.pending:
+            # Defense in depth: a decision is already in flight; never start a
+            # second concurrent one for the same group.
+            return
         state = self.get_state(umo)
         now = self.clock()
 
@@ -565,7 +574,11 @@ class SocialEngine:
             state.shown_topic = decision.topic or chosen.topic or state.shown_topic
             return
 
-        reply = sanitize_reply(decision.reply, self.config.blocklist())
+        reply = sanitize_reply(
+            decision.reply,
+            self.config.blocklist(),
+            max_length=self.config.max_reply_length,
+        )
         if not reply:
             self.last_decision[umo] = "empty_reply"
             return

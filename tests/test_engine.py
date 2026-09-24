@@ -903,3 +903,59 @@ def test_parse_failure_sets_backoff_and_metric():
     assert state.next_speak_after == 1060.0
 
 
+
+
+def test_debounce_fire_skips_when_decision_pending():
+    async def scenario():
+        llm_calls = []
+        engine = make_engine(
+            make_config(), json.dumps({"action": "SPEAK", "reply": "hi"}), llm_calls=llm_calls
+        )
+        hold = asyncio.create_task(asyncio.sleep(3600))
+        engine.pending[UMO] = hold
+        try:
+            await engine._on_debounce_fire(UMO)
+        finally:
+            hold.cancel()
+        await engine.wait_idle()
+        return engine, llm_calls
+
+    engine, llm_calls = asyncio.run(scenario())
+    assert llm_calls == []
+    assert engine.states == {}
+
+
+def test_maybe_evict_clears_last_decision():
+    engine = make_engine(make_config(state_ttl_seconds=10), json.dumps({"action": "IGNORE"}))
+    engine.get_state(UMO).last_user_message_time = 1000.0
+    engine.last_decision[UMO] = "speak"
+
+    removed = engine.maybe_evict(2000.0)
+    assert removed == [UMO]
+    assert UMO not in engine.states
+    assert UMO not in engine.last_decision
+
+
+def test_reset_group_clears_last_decision():
+    engine = make_engine(make_config(), json.dumps({"action": "IGNORE"}))
+    engine.get_state(UMO)
+    engine.last_decision[UMO] = "speak"
+
+    engine.reset_group(UMO)
+    assert UMO not in engine.states
+    assert UMO not in engine.last_decision
+
+
+def test_reply_truncated_to_configured_max_length():
+    async def scenario():
+        sent = []
+        decision = json.dumps({"action": "SPEAK", "reply": "这个副本好难呀打得我头都秃了"})
+        engine = make_engine(make_config(max_reply_length=5), decision, sent=sent)
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return sent
+
+    sent = asyncio.run(scenario())
+    assert sent == [(UMO, "这个副本好", None)]
