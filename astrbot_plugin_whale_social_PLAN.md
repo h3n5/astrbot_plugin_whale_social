@@ -5,6 +5,7 @@
 > 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
 > v3 变更：**锁定 5 项决策**；按官方文档核实并更新全部 API；补充**记忆回写**设计；白名单改为**默认关闭**；移除“接管模式 / 身份披露 / 无上下文自言自语”。
 > API 事实来源：AstrBot 官方文档（ai / send-message / listen-message-event / proactive-agent，2026）。
+> V2 计划：见 [`astrbot_plugin_whale_social_PLAN_v2.md`](./astrbot_plugin_whale_social_PLAN_v2.md)（会话线程 / Debounce / 群级决策）。
 
 ---
 
