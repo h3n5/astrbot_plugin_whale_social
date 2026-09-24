@@ -428,7 +428,10 @@ def test_debounce_coalesces_burst_into_single_decision():
     assert len(sent) == 1
     threads = engine.get_state(UMO).threads
     assert len(threads) == 1
-    assert len(threads[0].messages) == 4
+    human_messages = [item for item in threads[0].messages if not item.get("is_bot")]
+    assert len(human_messages) == 4
+    # The bot's own send is recorded locally into the same thread.
+    assert any(item.get("is_bot") for item in threads[0].messages)
 
 
 def test_prompt_includes_selected_thread_id():
@@ -600,5 +603,303 @@ def test_phase_reports_idle_then_waiting():
     engine, waiting = asyncio.run(scenario())
     assert waiting == "waiting"
     assert engine.phase(UMO) == "idle"
+
+
+class _GateSleep:
+    """Reply-delay sleeper the test can hold and release."""
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def __call__(self, _delay: float) -> None:
+        self.entered.set()
+        await self.release.wait()
+
+
+def test_topic_switch_during_delay_cancels_stale_reply():
+    async def scenario():
+        sent = []
+        sleeper = _GateSleep()
+        engine = make_engine(
+            make_config(interest_keywords="副本\n抽卡"),
+            json.dumps({"action": "SPEAK", "topic": "副本", "reply": "hi"}),
+            sent=sent,
+            sleep=sleeper,
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await sleeper.entered.wait()
+        # The group switches to another topic while the reply is queued.
+        await engine.handle_message(
+            UMO, message_id="2", sender="u2", text="新卡池抽卡吗", is_bot=False
+        )
+        await engine.handle_message(
+            UMO, message_id="3", sender="u3", text="抽卡出货了", is_bot=False
+        )
+        sleeper.release.set()
+        await engine.wait_idle()
+        return engine, sent
+
+    engine, sent = asyncio.run(scenario())
+    assert sent == []
+    assert engine.last_decision[UMO] == "topic_changed"
+
+
+def test_same_thread_progress_during_delay_still_sends():
+    async def scenario():
+        sent = []
+        sleeper = _GateSleep()
+        engine = make_engine(
+            make_config(interest_keywords="副本\n抽卡"),
+            json.dumps({"action": "SPEAK", "topic": "副本", "reply": "hi"}),
+            sent=sent,
+            sleep=sleeper,
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await sleeper.entered.wait()
+        # Someone continues the *same* thread: the reply is still timely.
+        await engine.handle_message(
+            UMO, message_id="2", sender="u2", text="副本我也去", is_bot=False
+        )
+        sleeper.release.set()
+        await engine.wait_idle()
+        return engine, sent
+
+    engine, sent = asyncio.run(scenario())
+    assert sent == [(UMO, "hi", None)]
+
+
+def test_quiet_hours_use_configured_timezone():
+    import core.engine as engine_mod
+
+    calls = []
+    original = engine_mod.local_datetime
+
+    def fake_local(now, tz_name):
+        calls.append(tz_name)
+        return original(now, tz_name)
+
+    engine_mod.local_datetime = fake_local
+    try:
+        async def scenario():
+            engine = make_engine(
+                make_config(timezone="Asia/Shanghai"), json.dumps({"action": "IGNORE"})
+            )
+            await engine.handle_message(
+                UMO, message_id="1", sender="u1", text="打副本", is_bot=False
+            )
+            await engine.wait_idle()
+
+        asyncio.run(scenario())
+    finally:
+        engine_mod.local_datetime = original
+    assert calls and all(name == "Asia/Shanghai" for name in calls)
+
+
+def test_unrelated_chatter_keeps_reply_window_open():
+    async def scenario():
+        engine = make_engine(
+            make_config(base_speak_probability=0.0), json.dumps({"action": "IGNORE"})
+        )
+        state = engine.get_state(UMO)
+        state.awaiting_reply_until = 2000.0
+        state.last_bot_ignored = False
+        await engine.handle_message(
+            UMO, message_id="1", sender="u2", text="今天天气不错", is_bot=False
+        )
+        await engine.wait_idle()
+        return state
+
+    state = asyncio.run(scenario())
+    assert state.awaiting_reply_until == 2000.0
+    assert state.last_bot_ignored is False
+
+
+def test_thread_continuation_closes_reply_window():
+    async def scenario():
+        engine = make_engine(
+            make_config(interest_keywords="副本"),
+            json.dumps({"action": "SPEAK", "topic": "副本", "reply": "hi"}),
+            rng=FakeRng(uniform_value=10.0),
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        state = engine.get_state(UMO)
+        assert state.awaiting_reply_until == 1030.0
+        await engine.handle_message(
+            UMO, message_id="2", sender="u2", text="副本我也去", is_bot=False
+        )
+        await engine.wait_idle()
+        return state
+
+    state = asyncio.run(scenario())
+    assert state.awaiting_reply_until == 0.0
+    assert state.last_bot_ignored is False
+
+
+def test_reply_to_bot_message_closes_reply_window():
+    async def scenario():
+        engine = make_engine(
+            make_config(base_speak_probability=0.0), json.dumps({"action": "IGNORE"})
+        )
+        state = engine.get_state(UMO)
+        state.awaiting_reply_until = 2000.0
+        state.messages.append(
+            {
+                "message_id": "botmsg",
+                "sender": "9999",
+                "text": "hi",
+                "timestamp": 1000.0,
+                "is_bot": True,
+                "kind": "text",
+                "reply_to": "",
+                "at_users": [],
+            }
+        )
+        await engine.handle_message(
+            UMO, message_id="m", sender="u1", text="你说啥", is_bot=False, reply_to="botmsg"
+        )
+        await engine.wait_idle()
+        return state
+
+    state = asyncio.run(scenario())
+    assert state.awaiting_reply_until == 0.0
+
+
+def test_successful_send_records_outgoing_in_thread():
+    async def scenario():
+        engine = make_engine(
+            make_config(),
+            json.dumps({"action": "SPEAK", "reply": "带我一个"}),
+            rng=FakeRng(uniform_value=10.0),
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return engine
+
+    engine = asyncio.run(scenario())
+    state = engine.get_state(UMO)
+    assert len(state.threads) == 1
+    assert state.threads[0].bot_participated is True
+    assert any(
+        item.get("is_bot") and item.get("text") == "带我一个"
+        for item in state.threads[0].messages
+    )
+    assert any(
+        item.get("is_bot") and item.get("text") == "带我一个" for item in state.messages
+    )
+
+
+def test_platform_echo_of_own_send_is_not_double_counted():
+    async def scenario():
+        engine = make_engine(
+            make_config(),
+            json.dumps({"action": "SPEAK", "reply": "带我一个"}),
+            rng=FakeRng(uniform_value=10.0),
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        state = engine.get_state(UMO)
+        streak_before = state.consecutive_bot_messages
+        await engine.handle_message(
+            UMO, message_id="echo1", sender="9999", text="带我一个", is_bot=True
+        )
+        return state, streak_before
+
+    state, streak_before = asyncio.run(scenario())
+    assert streak_before == 1
+    assert state.consecutive_bot_messages == 1
+    assert (
+        sum(
+            1
+            for item in state.messages
+            if item.get("is_bot") and item.get("text") == "带我一个"
+        )
+        == 1
+    )
+
+
+def test_echo_arriving_during_send_is_suppressed_and_marker_cleared():
+    async def scenario():
+        holder = {}
+        sent = []
+        decision = json.dumps({"action": "SPEAK", "reply": "带我一个"})
+
+        async def llm_decide(umo, system_prompt, prompt):
+            return decision
+
+        async def send_message(umo, text, mention_user_id=None):
+            sent.append((umo, text, mention_user_id))
+            # Simulate the platform echoing our message back before send returns.
+            await holder["engine"].handle_message(
+                umo, message_id="echo-now", sender="9999", text=text, is_bot=True
+            )
+            return True
+
+        engine = SocialEngine(
+            make_config(),
+            llm_decide=llm_decide,
+            send_message=send_message,
+            sleep=_no_sleep,
+            rng=FakeRng(uniform_value=10.0),
+            clock=lambda: 1000.0,
+        )
+        holder["engine"] = engine
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return engine, sent
+
+    engine, sent = asyncio.run(scenario())
+    assert len(sent) == 1
+    state = engine.get_state(UMO)
+    assert state.consecutive_bot_messages == 1
+    assert state.local_outgoing_at == 0.0
+    assert sum(1 for item in state.messages if item.get("is_bot")) == 1
+
+
+def test_llm_call_failure_sets_backoff_and_metric():
+    async def scenario():
+        sent = []
+        engine = make_engine(make_config(), None, sent=sent)
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return engine, sent
+
+    engine, sent = asyncio.run(scenario())
+    assert sent == []
+    assert engine.last_decision[UMO] == "llm_failed"
+    state = engine.get_state(UMO)
+    assert state.llm_failure_count == 1
+    assert state.next_speak_after == 1060.0
+
+
+def test_parse_failure_sets_backoff_and_metric():
+    async def scenario():
+        engine = make_engine(make_config(), "我觉得可以聊")
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return engine
+
+    engine = asyncio.run(scenario())
+    assert engine.last_decision[UMO] == "parse_failed"
+    state = engine.get_state(UMO)
+    assert state.llm_failure_count == 1
+    assert state.next_speak_after == 1060.0
 
 

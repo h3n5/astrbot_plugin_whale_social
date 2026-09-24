@@ -33,12 +33,18 @@ class MessageCollector:
         now: float,
         reply_to: str = "",
         at_users: Optional[list[str]] = None,
+        close_reply_window: bool = True,
     ) -> Optional[dict[str, Any]]:
         """Record an observed message.
 
         Returns the stored message dict, or ``None`` when the event is a
         duplicate (same ``message_id``). Human messages reset the bot streak
         and may close the reply window; bot messages increase the streak.
+
+        ``close_reply_window`` lets the caller decide whether this message
+        actually answers the bot: unrelated chatter must not clear the
+        "ignored" flag, so the engine passes ``False`` and settles the window
+        itself once it knows the thread relation.
         """
         mid = str(message_id or "")
         if mid:
@@ -74,7 +80,8 @@ class MessageCollector:
         # Human message.
         state.last_user_message_time = now
         state.consecutive_bot_messages = 0  # P0-1: never stay muted forever
-        note_human_reply(state, now)
+        if close_reply_window:
+            note_human_reply(state, now)
         state.message_times.append(now)
         cutoff = now - RATE_WINDOW_SECONDS
         state.message_times = [t for t in state.message_times if t >= cutoff]
@@ -88,8 +95,13 @@ class MessageCollector:
         *,
         now: float,
         rng,
-    ) -> None:
-        """Bookkeeping after a successful proactive send."""
+    ) -> dict[str, Any]:
+        """Bookkeeping after a successful proactive send.
+
+        Also records the message locally so threads/context do not depend on
+        the platform echoing our own message back; the echo (if any) is
+        suppressed via the ``local_outgoing_*`` marker.
+        """
         state.last_proactive_msg = text
         # Draw the cooldown before mutating streak / ignored / last-bot-time so
         # the tier reflects the state *before* this send (a first message uses
@@ -102,6 +114,24 @@ class MessageCollector:
             0.1, min(state.social_energy - ENERGY_DRAIN, config.energy_max)
         )
         state.proactive_sent_today += 1
+
+        message = ChatMessage(
+            message_id=f"local-out-{int(now * 1000)}",
+            sender="bot",
+            text=str(text or ""),
+            timestamp=now,
+            is_bot=True,
+            kind="text",
+        )
+        payload = message.to_dict()
+        state.messages.append(payload)
+        limit = max(1, int(config.context_message_limit))
+        overflow = len(state.messages) - limit
+        if overflow > 0:
+            del state.messages[:overflow]
+        state.local_outgoing_at = now
+        state.local_outgoing_text = str(text or "")
+        return payload
 
     def build_context(self, state: "GroupState") -> str:
         limit = max(1, int(self.config.context_message_limit))

@@ -121,6 +121,7 @@ _PERSISTED_FIELDS: tuple[str, ...] = (
     "group_tokens_updated_at",
     "failure_count",
     "send_blocked_until",
+    "llm_failure_count",
 )
 
 
@@ -146,6 +147,8 @@ class GroupState:
     group_tokens_updated_at: float = 0.0
     failure_count: int = 0
     send_blocked_until: float = 0.0
+    # Consecutive decision-model failures (best-effort metric, persisted).
+    llm_failure_count: int = 0
 
     # Runtime-only.
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -158,6 +161,12 @@ class GroupState:
     debounce_deadline: float = 0.0
     debounce_first_trigger: float = 0.0
     selected_thread_id: str = ""
+    # One-shot reservation for the in-flight decision (observability + guard).
+    reserved_thread_id: str = ""
+    reserved_revision: int = 0
+    # Marker for our own just-sent message so a platform echo is not counted twice.
+    local_outgoing_at: float = 0.0
+    local_outgoing_text: str = ""
 
     def to_persist_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in _PERSISTED_FIELDS}

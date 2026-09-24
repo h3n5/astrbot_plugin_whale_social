@@ -18,6 +18,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
 from core.config import PluginConfig
+from core.content import normalize_content
 from core.engine import SocialEngine
 from core.memory import build_group_hint, build_writeback_user_text
 from storage.state_store import StateStore
@@ -208,19 +209,30 @@ class WhaleSocialPlugin(Star):
             reply_to, at_users = ("", [])
             if self.cfg.extract_message_segments:
                 reply_to, at_users = self._extract_relations(event)
+            kind, text = normalize_content(
+                event.message_str or "", self._component_names(event)
+            )
             await self.engine.handle_message(
                 event.unified_msg_origin,
                 message_id=message_id,
                 sender=sender_id,
-                text=event.message_str or "",
+                text=text,
                 is_bot=is_bot,
-                kind="text",
+                kind=kind,
                 mentioned=bool(getattr(event, "is_at_or_wake_command", False)),
                 reply_to=reply_to,
                 at_users=at_users,
             )
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] on_group_message failed: {exc}")
+
+    @staticmethod
+    def _component_names(event: AstrMessageEvent) -> list[str]:
+        message_obj = getattr(event, "message_obj", None)
+        parts = getattr(message_obj, "message", None)
+        if not isinstance(parts, (list, tuple)):
+            return []
+        return [type(part).__name__ for part in parts]
 
     @filter.on_llm_request()
     async def inject_group_context(self, event: AstrMessageEvent, req: Any) -> None:
@@ -272,6 +284,8 @@ class WhaleSocialPlugin(Star):
             lines.append(f"社交能量：{state.social_energy:.2f}")
             lines.append(f"今日主动：{state.proactive_sent_today}/{self.cfg.daily_proactive_cap}")
             lines.append(f"连续机器人发言：{state.consecutive_bot_messages}")
+            if state.llm_failure_count:
+                lines.append(f"决策模型失败累计：{state.llm_failure_count}")
             active_threads = [thread for thread in state.threads if not thread.ended]
             lines.append(f"活跃会话：{len(active_threads)}")
             if state.debounce_deadline > now:

@@ -232,6 +232,16 @@ def assign_thread(
             ]
             if pool:
                 target = max(pool, key=lambda thread: thread.last_activity)
+            elif (
+                config.thread_time_continuity_merge
+                and len(candidates) == 1
+                and not keyword_hits(text, keywords)
+            ):
+                # Low-confidence rule: plain keyword-less chit-chat with exactly
+                # one recent thread is treated as a continuation of it. Messages
+                # carrying their own interest keyword still start a new thread so
+                # distinct topics stay separable.
+                target = candidates[0]
 
     # 4. New conversation.
     if target is None:

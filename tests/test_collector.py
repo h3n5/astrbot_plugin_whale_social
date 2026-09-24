@@ -70,6 +70,22 @@ def test_human_message_inside_window_closes_it():
     assert state.awaiting_reply_until == 0.0
 
 
+def test_record_can_skip_reply_window_close():
+    collector = _collector(reply_window_seconds=30.0)
+    state = GroupState(awaiting_reply_until=100.0)
+    collector.record(
+        state,
+        message_id="m1",
+        sender="u",
+        text="unrelated chatter",
+        is_bot=False,
+        kind="text",
+        now=50.0,
+        close_reply_window=False,
+    )
+    assert state.awaiting_reply_until == 100.0
+
+
 def test_rate_buckets_prune_old_entries():
     collector = _collector()
     state = GroupState()
@@ -97,6 +113,24 @@ def test_note_outgoing_updates_all_bookkeeping():
     assert state.awaiting_reply_until == 130.0
     assert state.social_energy < 0.5
     assert state.proactive_sent_today == 1
+
+
+def test_note_outgoing_records_local_message_and_marker():
+    collector = _collector(
+        min_cooldown_seconds=10.0,
+        max_cooldown_seconds=20.0,
+        reply_window_seconds=30.0,
+    )
+    state = GroupState()
+    config = PluginConfig(
+        min_cooldown_seconds=10.0, max_cooldown_seconds=20.0, reply_window_seconds=30.0
+    )
+    payload = collector.note_outgoing(state, config, "hello", now=100.0, rng=FakeRng())
+    assert payload["is_bot"] is True
+    assert payload["text"] == "hello"
+    assert state.messages[-1] is payload
+    assert state.local_outgoing_at == 100.0
+    assert state.local_outgoing_text == "hello"
 
 
 def test_build_context_marks_bot_messages():

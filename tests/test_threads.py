@@ -240,3 +240,30 @@ def test_find_and_last_human_helpers():
     assert last_human_message(thread)["message_id"] == "1"
     assert thread_is_active(thread, config, 1000.0)
     assert not thread_is_active(thread, config, 1000.0 + config.thread_window_seconds + 1)
+
+
+def test_time_continuity_merges_keywordless_chatter_into_single_thread():
+    state = GroupState()
+    config = make_config()
+    first = assign_thread(state, msg("1", "u1", "今晚打副本吗", 1000.0), config, 1000.0)
+    second = assign_thread(state, msg("2", "u2", "哈哈哈笑死", 1005.0), config, 1005.0)
+    assert second is first
+    assert len(state.threads) == 1
+
+
+def test_keyword_message_still_starts_new_thread():
+    # A message with its own interest keyword must not be swallowed by the
+    # time-continuity fallback.
+    state = GroupState()
+    config = make_config()
+    assign_thread(state, msg("1", "u1", "今晚打副本吗", 1000.0), config, 1000.0)
+    assign_thread(state, msg("2", "u2", "新卡池抽卡吗", 1005.0), config, 1005.0)
+    assert len(state.threads) == 2
+
+
+def test_time_continuity_disabled_starts_new_thread():
+    state = GroupState()
+    config = make_config(thread_time_continuity_merge=False)
+    assign_thread(state, msg("1", "u1", "今晚打副本吗", 1000.0), config, 1000.0)
+    assign_thread(state, msg("2", "u2", "哈哈哈笑死", 1005.0), config, 1005.0)
+    assert len(state.threads) == 2

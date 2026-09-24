@@ -170,6 +170,7 @@ class PluginConfig:
     global_token_refill_seconds: int = 300
     send_failure_backoff_seconds: int = 300
     max_failure_backoff_seconds: int = 3600
+    llm_failure_backoff_seconds: int = 60
     timezone: str = "Asia/Shanghai"
     max_group_states: int = 100
     state_ttl_seconds: int = 604800
@@ -182,6 +183,7 @@ class PluginConfig:
     max_threads: int = 3
     min_thread_messages: int = 1
     thread_selection: str = "most_active"
+    thread_time_continuity_merge: bool = True
     reply_mention_user: bool = False
     extract_message_segments: bool = True
     # V2.0: reconnect-replay de-duplication.
@@ -223,6 +225,7 @@ class PluginConfig:
             global_token_refill_seconds=_as_int(_get(mapping, "global_token_refill_seconds", 300), 300),
             send_failure_backoff_seconds=_as_int(_get(mapping, "send_failure_backoff_seconds", 300), 300),
             max_failure_backoff_seconds=_as_int(_get(mapping, "max_failure_backoff_seconds", 3600), 3600),
+            llm_failure_backoff_seconds=_as_int(_get(mapping, "llm_failure_backoff_seconds", 60), 60),
             timezone=_as_str(_get(mapping, "timezone", "Asia/Shanghai"), "Asia/Shanghai"),
             max_group_states=_as_int(_get(mapping, "max_group_states", 100), 100),
             state_ttl_seconds=_as_int(_get(mapping, "state_ttl_seconds", 604800), 604800),
@@ -234,6 +237,7 @@ class PluginConfig:
             max_threads=_as_int(_get(mapping, "max_threads", 3), 3),
             min_thread_messages=_as_int(_get(mapping, "min_thread_messages", 1), 1),
             thread_selection=_as_str(_get(mapping, "thread_selection", "most_active"), "most_active"),
+            thread_time_continuity_merge=_as_bool(_get(mapping, "thread_time_continuity_merge", True), True),
             reply_mention_user=_as_bool(_get(mapping, "reply_mention_user", False), False),
             extract_message_segments=_as_bool(_get(mapping, "extract_message_segments", True), True),
             dedup_ttl_seconds=_as_float(_get(mapping, "dedup_ttl_seconds", 300), 300.0),

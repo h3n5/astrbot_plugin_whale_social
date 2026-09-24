@@ -143,6 +143,12 @@
     "default": 3600,
     "hint": "指数退避的上限秒数。"
   },
+  "llm_failure_backoff_seconds": {
+    "description": "决策模型失败退避",
+    "type": "int",
+    "default": 60,
+    "hint": "决策模型调用失败或返回无效 JSON 时的退避秒数；0 = 不退避。与发送失败退避相互独立。"
+  },
   "timezone": {
     "description": "时区",
     "type": "string",
@@ -219,6 +225,12 @@
     "default": "most_active",
     "hint": "most_active 选最活跃会话；interest 优先选命中兴趣关键词的会话。"
   },
+  "thread_time_continuity_merge": {
+    "description": "会话时间连续合并",
+    "type": "bool",
+    "default": true,
+    "hint": "当群内只有一个近期会话、且新消息不含任何兴趣关键词时，按时间连续性并入该会话（低置信度兜底，改善多人无关键词闲聊的聚类）。"
+  },
   "reply_mention_user": {
     "description": "回应单人时 @ 对方",
     "type": "bool",
@@ -290,10 +302,10 @@
     "hint": "每行一个，回复中命中则丢弃该回复。"
   },
   "use_astrbot_memory": {
-    "description": "读取 AstrBot 会话记忆",
+    "description": "读取 AstrBot 会话记忆（尚未实现，预留）",
     "type": "bool",
     "default": true,
-    "hint": "把 AstrBot 会话历史作为额外上下文。"
+    "hint": "预留项：当前版本不会读取 AstrBot 会话历史作为额外上下文，配置此项暂无实际效果。"
   },
   "memory_writeback": {
     "description": "主动消息写回会话记忆",
