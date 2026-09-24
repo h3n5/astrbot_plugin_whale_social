@@ -1,0 +1,214 @@
+# astrbot_plugin_whale_social
+
+让鲸鱼娘在群聊里像**普通群友**一样自然地潜水、观察，偶尔主动说一句。
+
+> 大多数时候潜水，偶尔参与；有兴趣才说话；说完不会连续刷屏；没人接话时会自然沉默。
+
+本插件**只做主动层**：被 @ / 唤醒的消息一律交给 AstrBot 默认 agent，插件只观察、不回复、不拦截事件。主动发言只在**发送成功后**尝试写回 AstrBot 会话记忆，让后续正常回复也能看到它刚才说过的话。
+
+- 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
+- 当前版本：`0.1.0`
+- 设计文档：见 [`astrbot_plugin_whale_social_PLAN.md`](./astrbot_plugin_whale_social_PLAN.md)
+
+---
+
+## 特性
+
+- **克制的主动参与**：本地规则先过滤，绝大多数消息直接被丢弃，只有少量进入 LLM 决策。
+- **三态决策**：`IGNORE` / `WAIT` / `SPEAK`，强制 JSON 输出，带括号平衡容错解析。
+- **分档冷却**：普通 / 刚参与 / 连续发言 / 上次被忽略，四档随机冷却，持久化到磁盘，重启后依然有效。
+- **回应窗口**：主动发言后开启窗口；有人接话即视为有效互动，窗口过期无人回应则标记“被忽略”，后续更沉默。
+- **活跃度反向调节**：群越刷屏，越不插话。
+- **兴趣关键词**：支持负向词与每群覆盖，命中兴趣提升意愿。
+- **延迟 + 复检**：发言前等待 2–8 秒，并复检冷却、话题、是否被 @，任何变化都可能取消。
+- **记忆回写与注入**：主动消息写回会话历史；正常 LLM 请求时以临时动态上下文注入群情，不污染 system prompt。
+- **安全默认**：白名单**默认关闭**（空 = 不启用任何群）；支持 `dry_run`；解析 / Provider / 记忆失败均安静降级。
+- **管理命令**：`/ws status|enable|disable|reset|why`（管理员）。
+- **纯净核心**：`core/` 与 `storage/` 不依赖 AstrBot，可直接跑单元测试（无需 LLM 或真实实例）。
+
+---
+
+## 安装
+
+1. 将本仓库放入 AstrBot 插件目录，目录名保持 `astrbot_plugin_whale_social`：
+
+   ```
+   <AstrBot>/data/plugins/astrbot_plugin_whale_social/
+   ```
+
+2. 重启 AstrBot，在 WebUI → 插件管理中找到“鲸鱼娘社交引擎”并启用。
+
+3. 打开插件配置：
+   - 保持 `dry_run = true` 先观察；
+   - 在 `group_allowlist` 中填入要启用的群 **UMO**（可用 `/sid` 获取）；
+   - 确认 `provider_id` 留空即可复用当前会话模型，或显式指定。
+
+4. 观察日志/`/ws status` 一段时间后，再关闭 `dry_run`。
+
+> **运营前提**：目标群应处于“被 @ / 唤醒才回复”模式（AstrBot 默认）。若开启“回复所有群消息”，默认 agent 会与本插件抢发消息。
+
+---
+
+## 配置项
+
+WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认值如下：
+
+| key | type | default | 说明 |
+|---|---|---|---|
+| `enabled` | bool | `true` | 全局开关（kill switch） |
+| `dry_run` | bool | `false` | 只记录决策与日志，不发送、不改状态 |
+| `group_allowlist` | list | `[]` | **默认关闭**；空 = 不启用任何群；每项为 UMO |
+| `min_message_length` | int | `2` | 过短消息不触发判断 |
+| `context_message_limit` | int | `20` | 入窗并发送给 LLM 的最近消息条数 |
+| `incoming_rate_limit` | int | `30` | 30 秒内人类消息超过此值视为刷屏 |
+| `min_cooldown_seconds` | int | `900` | 主动发言冷却下限 |
+| `max_cooldown_seconds` | int | `1800` | 主动发言冷却上限 |
+| `reply_window_seconds` | int | `120` | 回应窗口；超时无回应标记“被忽略” |
+| `base_speak_probability` | float | `0.08` | 主动发言基础概率（× SpeakScore，上限 0.8） |
+| `high_interest_bonus` | float | `1.8` | 高兴趣话题的参与倍率上限 |
+| `energy_initial` | float | `0.6` | 初始社交能量 |
+| `energy_max` | float | `1.0` | 社交能量上限 |
+| `daily_proactive_cap` | int | `20` | 每群每日主动上限；`0` = 不限制 |
+| `active_hours` | string | `08:00-23:59` | 允许主动的时段，支持跨午夜（如 `22:00-06:00`） |
+| `provider_id` | string | `""` | 留空使用当前会话模型 |
+| `interest_keywords` | text | 游戏/副本/… | 每行一个兴趣关键词 |
+| `negative_keywords` | text | `""` | 每行一个，命中则直接放弃本次参与 |
+| `group_keyword_overrides` | object | `{}` | 形如 `{"<umo>": "关键词1\n关键词2"}` |
+| `output_blocklist` | text | `""` | 每行一个，回复命中则丢弃 |
+| `use_astrbot_memory` | bool | `true` | 预留：读取 AstrBot 会话历史作为上下文（见「已知限制」） |
+| `memory_writeback` | bool | `true` | 主动发言成功后写回会话记忆 |
+| `inject_group_context` | bool | `true` | 正常 LLM 请求时注入简短群情 |
+| `persona_prompt` | text | 鲸鱼娘人格 | 只负责“她是谁 / 怎么说话” |
+| `decision_prompt` | text | `""` | 留空使用内置决策 Prompt；只负责“是否参与” |
+
+---
+
+## 管理命令
+
+需管理员权限：
+
+| 命令 | 说明 |
+|---|---|
+| `/ws status` | 查看本群启用状态、冷却剩余、能量、今日主动数、上次决策 |
+| `/ws enable` | **临时**启用本群（仅本次运行有效，持久请改 WebUI） |
+| `/ws disable` | **临时**停用本群 |
+| `/ws reset` | 清除本群社交状态 |
+| `/ws why` | 查看上次决策、冷却、连续发言、被忽略状态与当前时段 |
+
+---
+
+## 工作流程
+
+```
+群消息事件
+   │
+   ├─ 被 @ / 唤醒 ────────────────► AstrBot 默认 agent 回复（插件不参与）
+   │                                  插件仅：提升能量、标记 @、开启冷却让位
+   │
+   └─ 普通消息
+        ▼
+   Collector   入窗 / message_id 去重 / 滑动速率 / 能量
+        ▼
+   Gate        白名单 / 冷却 / 刷屏 / 连续发言 / 静默时段 / 每日上限
+        ▼
+   Scorer      TopicInterest × Activity × Energy × Ignored × Streak → [0, 3]
+        ▼
+   概率 = clamp(base_probability × score, 0, 0.8)
+        ▼
+   Decision LLM ── IGNORE（记录）/ WAIT（仅记录话题）/ SPEAK
+        ▼
+   延迟 2–8s + 复检（冷却 / 话题 / 是否被 @）
+        ▼
+   send_message ── 成功后：分档冷却 + 回应窗口 + 能量下降 + 记忆回写
+```
+
+分档冷却（在配置的 `min/max_cooldown_seconds` 基础上缩放）：
+
+| 场景 | 倍率 |
+|---|---|
+| 普通主动发言 | ×1.0 |
+| 刚参与过讨论（本进程内有 bot 发言） | min×⅓ / max×½ |
+| 连续主动发言 | ×2.0 |
+| 上次完全静默（无人回应） | min×2.0 / max×3.0 |
+
+---
+
+## 记忆
+
+- **写回**：主动发送成功后，以「触发消息 → 主动回复」一对写入当前会话（`conversation_manager.add_message_pair`）。
+- **注入**：在 `@filter.on_llm_request` 中把群情摘要作为 `extra_user_content_parts` 注入，并尝试 `mark_as_temp()`（该 API 需 ≥ 4.24.0，缺失时降级）。
+- **降级**：发送或回写失败只记录脱敏日志，不影响默认回复管线。
+- **验收**：上线前请在目标平台确认主动回写使用的 CID 与后续 @ 回复读取的 CID 一致；若不一致，请关闭 `memory_writeback`。
+
+---
+
+## 安全默认与边界
+
+- 白名单默认关闭；空列表 = 全群静默。
+- 被 @ 时**永不** `stop_event()`、**不 yield**，绝不重复回复。
+- 群聊内容视为不可信数据，作为数据段传给决策模型，并限制回复长度、过滤禁用词。
+- 只持久化节奏/计数类字段；**不持久化**消息窗口与速率桶（时间戳会过期污染上下文）。
+- `state.json` 使用临时文件 + `os.replace` 原子替换，并带 `schema_version` 版本守卫。
+- V1 明确只支持**单实例**运行。
+
+---
+
+## 项目结构
+
+```
+main.py                 # 事件入口、生命周期、AstrBot 适配、/ws 命令
+metadata.yaml
+_conf_schema.json
+core/                   # 纯 Python 策略层（无 AstrBot 依赖）
+  config.py             # PluginConfig + 时段解析
+  models.py             # ChatMessage / GroupState
+  collector.py          # 入窗 / 去重 / 速率 / 能量 / 出场记账
+  gate.py               # Signal Gate
+  scorer.py             # SpeakScore
+  topic.py              # 关键词兴趣 / 负向词
+  cooldown.py           # 分档冷却 + 回应窗口
+  decision.py           # Prompt 构建 + JSON 容错解析
+  reply.py              # 回复清洗 / 过滤 / 截断
+  memory.py             # 群情 hint 与回写 payload
+  engine.py             # 异步编排（依赖注入，便于测试）
+storage/
+  state_store.py        # 原子持久化 + schema 守卫
+tests/                  # pytest + 假 LLM / 假发送，无需 AstrBot
+data/
+  state.json            # 运行时状态（自动生成，勿提交真实群数据）
+```
+
+---
+
+## 测试
+
+测试不调用 LLM、不依赖 AstrBot，全部用 mock 边界：
+
+```bash
+python -m pytest -q
+```
+
+覆盖：冷却分档与持久化、回应窗口结算、去重、窗口截断、速率、SpeakScore、Gate 各分支、JSON 容错解析、回复过滤、原子写与版本守卫、以及引擎端到端（发言/忽略/被 @/dry_run/冷却/竞态取消/shutdown）。
+
+> 测试需要 `pytest`（仅开发依赖，插件运行本身无第三方依赖）。
+
+---
+
+## 已知限制 / 路线图
+
+当前 `0.1.0` 已实现计划中的核心主动链路与全部 P0 修正；以下为计划中尚未落地的部分：
+
+- `use_astrbot_memory`：配置项已预留，尚未读取 AstrBot 会话历史做额外上下文。
+- 决策与回复目前为**一次** LLM 调用（同一次 JSON 同时给出 `action` 与 `reply`），计划中的“两阶段分离”尚未拆分。
+- 未实现全局/每群令牌桶、全局每日上限、发送失败指数退避、`timezone` 配置、审计日志与影子模式指标。
+- 未实现状态 LRU/TTL 淘汰、非文本消息在入口处的显式归一、`state_revision`/发送 reservation（当前用 `pending` + 发送前复检替代）。
+- V2：话题 embedding、群/用户画像、每群人格。
+
+---
+
+## 许可与合规
+
+- 不主动声明自己是 AI；平台与法规合规责任由运营方自行评估。
+- 请勿提交凭据、真实群 UMO 或真实聊天记录。
+- `metadata.yaml` 中的 `repo` 为占位地址，发布前请替换。
+# astrbot_plugin_whale_social
