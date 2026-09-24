@@ -149,6 +149,12 @@
     "default": 60,
     "hint": "决策模型调用失败或返回无效 JSON 时的退避秒数；0 = 不退避。与发送失败退避相互独立。"
   },
+  "llm_timeout_seconds": {
+    "description": "决策模型超时",
+    "type": "int",
+    "default": 60,
+    "hint": "等待决策模型响应的最长秒数，超时按失败退避处理；0 表示不限制。"
+  },
   "timezone": {
     "description": "时区",
     "type": "string",
@@ -300,6 +306,12 @@
     "type": "text",
     "default": "",
     "hint": "每行一个，回复中命中则丢弃该回复。"
+  },
+  "max_reply_length": {
+    "description": "回复最大长度",
+    "type": "int",
+    "default": 200,
+    "hint": "主动回复超过该字符数时截断；0 表示不限制。"
   },
   "use_astrbot_memory": {
     "description": "读取 AstrBot 会话记忆（尚未实现，预留）",

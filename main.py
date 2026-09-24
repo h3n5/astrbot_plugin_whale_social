@@ -24,6 +24,10 @@ from core.memory import build_group_hint, build_writeback_user_text
 from storage.state_store import StateStore
 
 PLUGIN_NAME = "astrbot_plugin_whale_social"
+# Hard cap on one proactive send; a hung platform adapter must not keep the
+# group's decision slot occupied forever. The engine rolls back and backs off
+# on failure, so a late-delivered message is the safe direction.
+SEND_TIMEOUT_SECONDS = 30.0
 
 
 class WhaleSocialPlugin(Star):
@@ -42,6 +46,7 @@ class WhaleSocialPlugin(Star):
             on_change=self._schedule_save,
         )
         self._save_task: Optional[asyncio.Task[None]] = None
+        self._dirty = False
 
     # -- lifecycle -------------------------------------------------------
 
@@ -71,9 +76,17 @@ class WhaleSocialPlugin(Star):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        self._dirty = True
         if self._save_task is not None and not self._save_task.done():
             return
-        self._save_task = loop.create_task(self._save_now())
+        self._save_task = loop.create_task(self._save_loop())
+
+    async def _save_loop(self) -> None:
+        # Drain the dirty flag: changes made while a save is in flight must not
+        # be lost, so keep saving until one full pass observes no new change.
+        while self._dirty:
+            self._dirty = False
+            await self._save_now()
 
     async def _save_now(self) -> None:
         try:
@@ -101,18 +114,35 @@ class WhaleSocialPlugin(Star):
         if not provider_id:
             logger.warning(f"[{PLUGIN_NAME}] no chat provider for {umo}")
             return None
+        timeout = self.cfg.llm_timeout_seconds
+
+        async def _generate(**kwargs: Any) -> Any:
+            coro = self.context.llm_generate(**kwargs)
+            if timeout > 0:
+                # A hung provider must not hold the group's decision slot
+                # forever; TimeoutError below maps to the llm_failed backoff.
+                return await asyncio.wait_for(coro, timeout)
+            return await coro
+
         try:
-            response = await self.context.llm_generate(
+            response = await _generate(
                 chat_provider_id=provider_id,
                 prompt=prompt,
                 system_prompt=system_prompt,
             )
         except TypeError:
             # Older signature without ``system_prompt``.
-            response = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=f"{system_prompt}\n\n{prompt}",
-            )
+            try:
+                response = await _generate(
+                    chat_provider_id=provider_id,
+                    prompt=f"{system_prompt}\n\n{prompt}",
+                )
+            except Exception as exc:
+                logger.warning(f"[{PLUGIN_NAME}] llm_generate failed: {exc}")
+                return None
+        except asyncio.TimeoutError:
+            logger.warning(f"[{PLUGIN_NAME}] llm_generate timed out after {timeout}s for {umo}")
+            return None
         except Exception as exc:
             logger.warning(f"[{PLUGIN_NAME}] llm_generate failed: {exc}")
             return None
@@ -121,8 +151,20 @@ class WhaleSocialPlugin(Star):
     async def _send_message(self, umo: str, text: str, mention_user_id: Optional[str] = None) -> bool:
         try:
             chain = self._build_chain(text, mention_user_id)
-            result = await self.context.send_message(umo, chain)
+            coro = self.context.send_message(umo, chain)
+            # AstrBot's contract: True on success, False when no platform
+            # handles the session, exceptions on transport errors.
+            result = (
+                await asyncio.wait_for(coro, SEND_TIMEOUT_SECONDS)
+                if SEND_TIMEOUT_SECONDS > 0
+                else await coro
+            )
             return bool(result)
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[{PLUGIN_NAME}] send_message timed out after {SEND_TIMEOUT_SECONDS}s for {umo}"
+            )
+            return False
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] send_message failed: {exc}")
             return False

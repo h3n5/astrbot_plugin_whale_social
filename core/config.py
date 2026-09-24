@@ -171,6 +171,7 @@ class PluginConfig:
     send_failure_backoff_seconds: int = 300
     max_failure_backoff_seconds: int = 3600
     llm_failure_backoff_seconds: int = 60
+    llm_timeout_seconds: int = 60
     timezone: str = "Asia/Shanghai"
     max_group_states: int = 100
     state_ttl_seconds: int = 604800
@@ -195,6 +196,7 @@ class PluginConfig:
     negative_keywords: str = ""
     group_keyword_overrides: dict[str, list[str]] = field(default_factory=dict)
     output_blocklist: str = ""
+    max_reply_length: int = 200
     use_astrbot_memory: bool = True
     memory_writeback: bool = True
     inject_group_context: bool = True
@@ -226,6 +228,7 @@ class PluginConfig:
             send_failure_backoff_seconds=_as_int(_get(mapping, "send_failure_backoff_seconds", 300), 300),
             max_failure_backoff_seconds=_as_int(_get(mapping, "max_failure_backoff_seconds", 3600), 3600),
             llm_failure_backoff_seconds=_as_int(_get(mapping, "llm_failure_backoff_seconds", 60), 60),
+            llm_timeout_seconds=_as_int(_get(mapping, "llm_timeout_seconds", 60), 60),
             timezone=_as_str(_get(mapping, "timezone", "Asia/Shanghai"), "Asia/Shanghai"),
             max_group_states=_as_int(_get(mapping, "max_group_states", 100), 100),
             state_ttl_seconds=_as_int(_get(mapping, "state_ttl_seconds", 604800), 604800),
@@ -248,6 +251,7 @@ class PluginConfig:
             negative_keywords=_as_str(_get(mapping, "negative_keywords", ""), ""),
             group_keyword_overrides=_as_keyword_overrides(_get(mapping, "group_keyword_overrides", {})),
             output_blocklist=_as_str(_get(mapping, "output_blocklist", ""), ""),
+            max_reply_length=_as_int(_get(mapping, "max_reply_length", 200), 200),
             use_astrbot_memory=_as_bool(_get(mapping, "use_astrbot_memory", True), True),
             memory_writeback=_as_bool(_get(mapping, "memory_writeback", True), True),
             inject_group_context=_as_bool(_get(mapping, "inject_group_context", True), True),
