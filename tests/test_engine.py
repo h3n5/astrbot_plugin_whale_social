@@ -47,6 +47,7 @@ def make_engine(
     clock=None,
     sleep=None,
     writeback=None,
+    send_result=True,
 ):
     async def llm_decide(umo, system_prompt, prompt):
         return decision
@@ -54,7 +55,7 @@ def make_engine(
     async def send_message(umo, text):
         if sent is not None:
             sent.append((umo, text))
-        return True
+        return send_result
 
     async def default_writeback(umo, user_text, assistant_text):
         if writebacks is not None:
@@ -92,6 +93,7 @@ def test_speak_sends_schedules_and_writes_back():
     assert state.next_speak_after == 1010.0
     assert state.awaiting_reply_until == 1030.0
     assert writebacks == [(UMO, "今晚打副本吗", "带我一个")]
+    assert engine.flow.global_state.proactive_sent_today == 1
 
 
 def test_mention_is_observe_only():
@@ -338,3 +340,61 @@ def test_shutdown_cancels_pending_tasks():
     engine, sent = asyncio.run(scenario())
     assert sent == []
     assert engine.pending == {}
+
+
+def test_send_failure_sets_backoff_and_does_not_count():
+    async def scenario():
+        sent = []
+        engine = make_engine(
+            make_config(send_failure_backoff_seconds=100, max_failure_backoff_seconds=100),
+            json.dumps({"action": "SPEAK", "reply": "hi"}),
+            sent=sent,
+            send_result=False,
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u", text="打副本", is_bot=False
+        )
+        await engine.wait_idle()
+        return engine, sent
+
+    engine, sent = asyncio.run(scenario())
+    assert sent == [(UMO, "hi")]  # send was attempted
+    state = engine.get_state(UMO)
+    assert state.failure_count == 1
+    assert state.send_blocked_until == 1100.0
+    assert state.proactive_sent_today == 0
+    assert engine.flow.global_state.proactive_sent_today == 0
+
+
+def test_maybe_evict_drops_stale_states_by_ttl():
+    engine = make_engine(
+        make_config(state_ttl_seconds=1000, max_group_states=0),
+        json.dumps({"action": "IGNORE"}),
+    )
+    engine.get_state("fresh").last_user_message_time = 4500.0
+    engine.get_state("stale").last_user_message_time = 100.0
+
+    removed = engine.maybe_evict(5000.0)
+    assert removed == ["stale"]
+    assert "fresh" in engine.states
+    assert "stale" not in engine.states
+
+
+def test_maybe_evict_caps_count_keeping_most_recent():
+    engine = make_engine(
+        make_config(state_ttl_seconds=0, max_group_states=2),
+        json.dumps({"action": "IGNORE"}),
+    )
+    for group, last in (("g0", 300.0), ("g1", 100.0), ("g2", 200.0)):
+        engine.get_state(group).last_user_message_time = last
+
+    engine.maybe_evict(1000.0)
+    assert set(engine.states) == {"g0", "g2"}
+
+
+def test_global_flow_state_roundtrips_through_engine():
+    engine = make_engine(make_config(), json.dumps({"action": "IGNORE"}))
+    engine.load_global({"proactive_sent_today": 4, "daily_reset_date": "2026-01-01"})
+    exported = engine.export_global()
+    assert exported["proactive_sent_today"] == 4
+    assert exported["daily_reset_date"] == "2026-01-01"

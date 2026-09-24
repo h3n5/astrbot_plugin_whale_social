@@ -101,6 +101,66 @@
     "default": 20,
     "hint": "单个群每天最多主动发言次数；0 表示不限制。"
   },
+  "global_daily_proactive_cap": {
+    "description": "全局每日主动上限",
+    "type": "int",
+    "default": 100,
+    "hint": "所有群合计每天最多主动发言次数；0 表示不限制。"
+  },
+  "group_token_bucket_capacity": {
+    "description": "每群突发令牌上限",
+    "type": "int",
+    "default": 3,
+    "hint": "单个群短时间内的突发主动发言上限；0 表示不限制。"
+  },
+  "group_token_refill_seconds": {
+    "description": "每群令牌恢复时间",
+    "type": "int",
+    "default": 900,
+    "hint": "每群每恢复一个主动发送令牌所需的秒数。"
+  },
+  "global_token_bucket_capacity": {
+    "description": "全局突发令牌上限",
+    "type": "int",
+    "default": 10,
+    "hint": "所有群合计的突发主动发言上限；0 表示不限制。"
+  },
+  "global_token_refill_seconds": {
+    "description": "全局令牌恢复时间",
+    "type": "int",
+    "default": 300,
+    "hint": "全局每恢复一个主动发送令牌所需的秒数。"
+  },
+  "send_failure_backoff_seconds": {
+    "description": "发送失败初始退避",
+    "type": "int",
+    "default": 300,
+    "hint": "发送/Provider 失败后的初始退避秒数，失败越多次退避越长。"
+  },
+  "max_failure_backoff_seconds": {
+    "description": "发送失败退避上限",
+    "type": "int",
+    "default": 3600,
+    "hint": "指数退避的上限秒数。"
+  },
+  "timezone": {
+    "description": "时区",
+    "type": "string",
+    "default": "Asia/Shanghai",
+    "hint": "每日配额、静默时段和跨日重置使用的 IANA 时区；留空使用本机时区。"
+  },
+  "max_group_states": {
+    "description": "最多追踪群数",
+    "type": "int",
+    "default": 100,
+    "hint": "状态数量上限，超出按最近活跃保留；0 表示不限制。"
+  },
+  "state_ttl_seconds": {
+    "description": "状态保留时长",
+    "type": "int",
+    "default": 604800,
+    "hint": "长期不活跃的群状态自动淘汰的秒数（默认 7 天）；0 表示不淘汰。"
+  },
   "active_hours": {
     "description": "允许主动的时段",
     "type": "string",

@@ -17,11 +17,13 @@ from core.collector import MessageCollector
 from core.config import PluginConfig
 from core.cooldown import in_cooldown, settle_reply_window
 from core.decision import build_decision_prompt, build_system_prompt, parse_decision
+from core.flow import FlowController
 from core.gate import check_gate
 from core.memory import build_group_hint
 from core.models import GroupState
 from core.reply import sanitize_reply
 from core.scorer import compute_score
+from core.timeutil import day_key
 from core.topic import keyword_hits
 
 LlmDecide = Callable[[str, str, str], Awaitable[Optional[str]]]
@@ -65,6 +67,7 @@ class SocialEngine:
 
         self.states: dict[str, GroupState] = {}
         self.collector = MessageCollector(config)
+        self.flow = FlowController(config)
         self.pending: dict[str, asyncio.Task[None]] = {}
         self.last_decision: dict[str, str] = {}
 
@@ -112,6 +115,42 @@ class SocialEngine:
                 energy_initial=self.config.energy_initial,
             )
 
+    def export_global(self) -> dict[str, Any]:
+        return self.flow.export_global()
+
+    def load_global(self, data: Optional[dict[str, Any]]) -> None:
+        self.flow.load_global(data)
+
+    def maybe_evict(self, now: float) -> list[str]:
+        """Drop stale groups (TTL) and cap the number of tracked groups.
+
+        Returns the removed UMOs. Keeps the most recently active groups.
+        """
+        removed: list[str] = []
+        ttl = self.config.state_ttl_seconds
+        if ttl > 0:
+            for umo, state in list(self.states.items()):
+                last_seen = max(state.last_user_message_time, state.last_bot_message_time)
+                if last_seen > 0 and now - last_seen > ttl:
+                    del self.states[umo]
+                    removed.append(umo)
+
+        cap = self.config.max_group_states
+        if cap > 0 and len(self.states) > cap:
+            ordered = sorted(
+                self.states.items(),
+                key=lambda item: max(
+                    item[1].last_user_message_time, item[1].last_bot_message_time
+                ),
+                reverse=True,
+            )
+            for umo, _state in ordered[cap:]:
+                del self.states[umo]
+                removed.append(umo)
+        if removed:
+            self._notify()
+        return removed
+
     def _notify(self) -> None:
         if self.on_change is None:
             return
@@ -121,7 +160,7 @@ class SocialEngine:
             pass
 
     def _ensure_daily_reset(self, state: GroupState, now: float) -> None:
-        today = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
+        today = day_key(now, self.config.timezone)
         if state.daily_reset_date != today:
             state.daily_reset_date = today
             state.proactive_sent_today = 0
@@ -187,7 +226,7 @@ class SocialEngine:
         if umo in self.pending:
             return  # a decision for this group is already in flight
 
-        gate = check_gate(state, self.config, now, datetime.fromtimestamp(now))
+        gate = check_gate(state, self.config, now, datetime.fromtimestamp(now), flow=self.flow)
         if not gate.allowed:
             self._notify()
             return
@@ -273,14 +312,23 @@ class SocialEngine:
             self.last_decision[umo] = "topic_changed"
             return
 
+        allowed, reason = self.flow.check(state, now)
+        if not allowed:
+            self.last_decision[umo] = reason
+            return
+
         if self.config.dry_run:
             self.last_decision[umo] = "dry_run"
             return
 
+        self.flow.reserve(state, now)
         sent = await self.send_message(umo, reply)
         if not sent:
+            self.flow.rollback(state, now)
             self.last_decision[umo] = "send_failed"
+            self._notify()
             return
+        self.flow.commit_success(state, now)
 
         state.mentioned_until = 0.0
         self.collector.note_outgoing(

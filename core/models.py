@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -60,6 +60,10 @@ _PERSISTED_FIELDS: tuple[str, ...] = (
     "proactive_sent_today",
     "daily_reset_date",
     "shown_topic",
+    "group_tokens",
+    "group_tokens_updated_at",
+    "failure_count",
+    "send_blocked_until",
 )
 
 
@@ -79,6 +83,12 @@ class GroupState:
     proactive_sent_today: int = 0
     daily_reset_date: str = ""
     shown_topic: str = ""
+
+    # Flow control (persisted): token bucket + failure backoff.
+    group_tokens: float = 0.0
+    group_tokens_updated_at: float = 0.0
+    failure_count: int = 0
+    send_blocked_until: float = 0.0
 
     # Runtime-only.
     messages: list[dict[str, Any]] = field(default_factory=list)

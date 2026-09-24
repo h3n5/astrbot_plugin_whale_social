@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from core.config import PluginConfig
+from core.flow import FlowController
 from core.gate import check_gate, rate_in_window, within_active_hours
 from core.models import GroupState
 
@@ -79,3 +80,21 @@ def test_active_hours_cross_midnight():
 def test_invalid_active_hours_means_always_on():
     assert within_active_hours("not-a-time", _moment(3)) is True
     assert within_active_hours("", _moment(3)) is True
+
+
+def test_gate_surfaces_failure_backoff_from_flow():
+    state = GroupState(send_blocked_until=NOW + 10)
+    flow = FlowController(_config())
+    result = check_gate(state, _config(), NOW, _moment(12), flow=flow)
+    assert result.allowed is False
+    assert result.reason == "failure_backoff"
+
+
+def test_gate_surfaces_exhausted_group_bucket():
+    state = GroupState(group_tokens=0.0, group_tokens_updated_at=NOW)
+    flow = FlowController(_config(group_token_bucket_capacity=1))
+    result = check_gate(
+        state, _config(group_token_bucket_capacity=1), NOW, _moment(12), flow=flow
+    )
+    assert result.allowed is False
+    assert result.reason == "group_bucket"

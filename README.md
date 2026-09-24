@@ -7,7 +7,7 @@
 本插件**只做主动层**：被 @ / 唤醒的消息一律交给 AstrBot 默认 agent，插件只观察、不回复、不拦截事件。主动发言只在**发送成功后**尝试写回 AstrBot 会话记忆，让后续正常回复也能看到它刚才说过的话。
 
 - 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
-- 当前版本：`0.1.0`
+- 当前版本：`0.1.1`
 - 设计文档：见 [`astrbot_plugin_whale_social_PLAN.md`](./astrbot_plugin_whale_social_PLAN.md)
 
 ---
@@ -22,6 +22,7 @@
 - **兴趣关键词**：支持负向词与每群覆盖，命中兴趣提升意愿。
 - **延迟 + 复检**：发言前等待 2–8 秒，并复检冷却、话题、是否被 @，任何变化都可能取消。
 - **记忆回写与注入**：主动消息写回会话历史；正常 LLM 请求时以临时动态上下文注入群情，不污染 system prompt。
+- **流控与韧性**：每群 + 全局令牌桶、每群 + 全局每日上限、发送失败指数退避、时区感知的跨日重置、状态 TTL/数量淘汰。
 - **安全默认**：白名单**默认关闭**（空 = 不启用任何群）；支持 `dry_run`；解析 / Provider / 记忆失败均安静降级。
 - **管理命令**：`/ws status|enable|disable|reset|why`（管理员）。
 - **纯净核心**：`core/` 与 `storage/` 不依赖 AstrBot，可直接跑单元测试（无需 LLM 或真实实例）。
@@ -69,6 +70,16 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 | `energy_initial` | float | `0.6` | 初始社交能量 |
 | `energy_max` | float | `1.0` | 社交能量上限 |
 | `daily_proactive_cap` | int | `20` | 每群每日主动上限；`0` = 不限制 |
+| `global_daily_proactive_cap` | int | `100` | 全局每日主动上限；`0` = 不限制 |
+| `group_token_bucket_capacity` | int | `3` | 每群突发令牌上限；`0` = 不限制 |
+| `group_token_refill_seconds` | int | `900` | 每群每恢复一个令牌所需秒数 |
+| `global_token_bucket_capacity` | int | `10` | 全局突发令牌上限；`0` = 不限制 |
+| `global_token_refill_seconds` | int | `300` | 全局每恢复一个令牌所需秒数 |
+| `send_failure_backoff_seconds` | int | `300` | 发送/Provider 失败后的初始退避秒数 |
+| `max_failure_backoff_seconds` | int | `3600` | 指数退避上限 |
+| `timezone` | string | `Asia/Shanghai` | 每日配额与跨日重置使用的 IANA 时区；留空用本机时区 |
+| `max_group_states` | int | `100` | 最多追踪群数，超出按最近活跃保留；`0` = 不限制 |
+| `state_ttl_seconds` | int | `604800` | 长期不活跃群状态的淘汰秒数（7 天）；`0` = 不淘汰 |
 | `active_hours` | string | `08:00-23:59` | 允许主动的时段，支持跨午夜（如 `22:00-06:00`） |
 | `provider_id` | string | `""` | 留空使用当前会话模型 |
 | `interest_keywords` | text | 游戏/副本/… | 每行一个兴趣关键词 |
@@ -109,7 +120,7 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
         ▼
    Collector   入窗 / message_id 去重 / 滑动速率 / 能量
         ▼
-   Gate        白名单 / 冷却 / 刷屏 / 连续发言 / 静默时段 / 每日上限
+   Gate        白名单 / 冷却 / 刷屏 / 连续发言 / 令牌桶 / 失败退避 / 静默时段 / 每日上限
         ▼
    Scorer      TopicInterest × Activity × Energy × Ignored × Streak → [0, 3]
         ▼
@@ -119,7 +130,9 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
         ▼
    延迟 2–8s + 复检（冷却 / 话题 / 是否被 @）
         ▼
-   send_message ── 成功后：分档冷却 + 回应窗口 + 能量下降 + 记忆回写
+   流控预占令牌 ── send_message
+        ├─ 失败：退还令牌 + 指数退避
+        └─ 成功：分档冷却 + 回应窗口 + 能量下降 + 每日计数 + 记忆回写
 ```
 
 分档冷却（在配置的 `min/max_cooldown_seconds` 基础上缩放）：
@@ -149,6 +162,7 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 - 群聊内容视为不可信数据，作为数据段传给决策模型，并限制回复长度、过滤禁用词。
 - 只持久化节奏/计数类字段；**不持久化**消息窗口与速率桶（时间戳会过期污染上下文）。
 - `state.json` 使用临时文件 + `os.replace` 原子替换，并带 `schema_version` 版本守卫。
+- 平台风控：每群/全局令牌桶 + 每群/全局每日上限 + 静默时段 + 有上限的指数退避；发送失败**不**计入成功配额、**不**回写记忆。
 - V1 明确只支持**单实例**运行。
 
 ---
@@ -159,6 +173,7 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 main.py                 # 事件入口、生命周期、AstrBot 适配、/ws 命令
 metadata.yaml
 _conf_schema.json
+requirements.txt        # 仅 tzdata（Windows 时区数据库）
 core/                   # 纯 Python 策略层（无 AstrBot 依赖）
   config.py             # PluginConfig + 时段解析
   models.py             # ChatMessage / GroupState
@@ -167,12 +182,14 @@ core/                   # 纯 Python 策略层（无 AstrBot 依赖）
   scorer.py             # SpeakScore
   topic.py              # 关键词兴趣 / 负向词
   cooldown.py           # 分档冷却 + 回应窗口
+  flow.py               # 令牌桶 / 每日配额 / 失败退避 / 全局状态
+  timeutil.py           # 时区与跨日 day key
   decision.py           # Prompt 构建 + JSON 容错解析
   reply.py              # 回复清洗 / 过滤 / 截断
   memory.py             # 群情 hint 与回写 payload
   engine.py             # 异步编排（依赖注入，便于测试）
 storage/
-  state_store.py        # 原子持久化 + schema 守卫
+  state_store.py        # 原子持久化 + schema 守卫（含全局流控状态）
 tests/                  # pytest + 假 LLM / 假发送，无需 AstrBot
 data/
   state.json            # 运行时状态（自动生成，勿提交真实群数据）
@@ -196,13 +213,15 @@ python -m pytest -q
 
 ## 已知限制 / 路线图
 
-当前 `0.1.0` 已实现计划中的核心主动链路与全部 P0 修正；以下为计划中尚未落地的部分：
+当前 `0.1.0` 已实现计划中的核心主动链路、全部 P0 修正，以及 V1.1 的流控/韧性部分；以下为尚未落地的部分：
 
 - `use_astrbot_memory`：配置项已预留，尚未读取 AstrBot 会话历史做额外上下文。
 - 决策与回复目前为**一次** LLM 调用（同一次 JSON 同时给出 `action` 与 `reply`），计划中的“两阶段分离”尚未拆分。
-- 未实现全局/每群令牌桶、全局每日上限、发送失败指数退避、`timezone` 配置、审计日志与影子模式指标。
-- 未实现状态 LRU/TTL 淘汰、非文本消息在入口处的显式归一、`state_revision`/发送 reservation（当前用 `pending` + 发送前复检替代）。
+- 未实现审计日志与影子模式指标。
+- 未实现非文本消息在入口处的显式归一、`state_revision`/发送 reservation（当前用 `pending` + 发送前复检替代）。
 - V2：话题 embedding、群/用户画像、每群人格。
+
+> `timezone` 依赖 IANA 时区数据库；Windows 等环境由 `requirements.txt` 自动安装 `tzdata`。若无法解析，插件会安静回退到本机时区。
 
 ---
 

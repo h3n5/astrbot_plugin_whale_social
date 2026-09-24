@@ -10,6 +10,7 @@ from core.config import parse_active_hours
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from core.config import PluginConfig
+    from core.flow import FlowController
     from core.models import GroupState
 
 
@@ -41,6 +42,7 @@ def check_gate(
     moment: datetime,
     *,
     mentioned: bool = False,
+    flow: "FlowController | None" = None,
 ) -> GateResult:
     """Evaluate the local gate. Order matters; the first failure wins."""
     if not config.enabled:
@@ -53,6 +55,10 @@ def check_gate(
         return GateResult(False, "rate_limit")
     if state.consecutive_bot_messages >= 1:
         return GateResult(False, "consecutive_bot")
+    if flow is not None:
+        allowed, reason = flow.check(state, now)
+        if not allowed:
+            return GateResult(False, reason)
     if not within_active_hours(config.active_hours, moment):
         return GateResult(False, "quiet_hours")
     if config.daily_proactive_cap > 0 and state.proactive_sent_today >= config.daily_proactive_cap:

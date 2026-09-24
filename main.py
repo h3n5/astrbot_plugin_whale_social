@@ -47,6 +47,7 @@ class WhaleSocialPlugin(Star):
     async def initialize(self) -> None:
         try:
             self.engine.load_persist(self.store.load())
+            self.engine.load_global(self.store.load_global())
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(f"[{PLUGIN_NAME}] load state failed: {exc}")
         logger.info(
@@ -75,7 +76,12 @@ class WhaleSocialPlugin(Star):
 
     async def _save_now(self) -> None:
         try:
-            await asyncio.to_thread(self.store.save, self.engine.export_persist())
+            self.engine.maybe_evict(time.time())
+            await asyncio.to_thread(
+                self.store.save,
+                self.engine.export_persist(),
+                self.engine.export_global(),
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(f"[{PLUGIN_NAME}] save state failed: {exc}")
 
@@ -211,12 +217,19 @@ class WhaleSocialPlugin(Star):
             f"演练模式：{'是' if self.cfg.dry_run else '否'}",
         ]
         if state is not None:
-            remaining = max(0, int(state.next_speak_after - time.time()))
+            now = time.time()
+            remaining = max(0, int(state.next_speak_after - now))
             lines.append(f"冷却剩余：{remaining}s")
+            if state.send_blocked_until > now:
+                lines.append(f"失败退避剩余：{int(state.send_blocked_until - now)}s")
             lines.append(f"社交能量：{state.social_energy:.2f}")
             lines.append(f"今日主动：{state.proactive_sent_today}/{self.cfg.daily_proactive_cap}")
             lines.append(f"连续机器人发言：{state.consecutive_bot_messages}")
             lines.append(f"上次决策：{self.engine.last_decision.get(umo, '无')}")
+        global_state = self.engine.flow.global_state
+        lines.append(
+            f"全局今日主动：{global_state.proactive_sent_today}/{self.cfg.global_daily_proactive_cap}"
+        )
         yield event.plain_result("\n".join(lines))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -251,9 +264,13 @@ class WhaleSocialPlugin(Star):
             yield event.plain_result(f"本群暂无状态。上次决策：{decision}")
             return
         moment = datetime.now()
+        backoff = ""
+        if state.send_blocked_until > time.time():
+            backoff = f"失败退避剩余：{int(state.send_blocked_until - time.time())}s\n"
         yield event.plain_result(
             f"上次决策：{decision}\n"
             f"冷却：{'进行中' if state.next_speak_after > time.time() else '已就绪'}\n"
+            f"{backoff}"
             f"连续机器人发言：{state.consecutive_bot_messages}\n"
             f"被忽略：{'是' if state.last_bot_ignored else '否'}\n"
             f"当前时间：{moment.strftime('%H:%M:%S')}（允许时段 {self.cfg.active_hours}）"

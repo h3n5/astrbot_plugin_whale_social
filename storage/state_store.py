@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from core.models import SCHEMA_VERSION
 
@@ -38,11 +38,31 @@ class StateStore:
             if isinstance(payload, dict)
         }
 
-    def save(self, states: Mapping[str, Mapping[str, Any]]) -> None:
-        payload = {
+    def load_global(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {}
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        if raw.get("schema_version") != self.schema_version:
+            return {}
+        payload = raw.get("global")
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def save(
+        self,
+        states: Mapping[str, Mapping[str, Any]],
+        global_state: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "states": {str(umo): dict(state) for umo, state in states.items()},
         }
+        if global_state is not None:
+            payload["global"] = dict(global_state)
         text = json.dumps(payload, ensure_ascii=False, indent=2)
 
         self.path.parent.mkdir(parents=True, exist_ok=True)

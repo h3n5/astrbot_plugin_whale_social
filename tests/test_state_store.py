@@ -64,3 +64,21 @@ def test_from_persist_dict_ignores_unknown_and_malformed_fields():
     assert state.social_energy == 0.7
     assert state.consecutive_bot_messages == 0  # malformed int keeps default
     assert state.last_proactive_msg == ""
+
+
+def test_global_payload_roundtrip(tmp_path):
+    store = StateStore(tmp_path / "state.json")
+    store.save(
+        {"a": {"social_energy": 1.0}},
+        {"proactive_sent_today": 3, "daily_reset_date": "2026-01-01"},
+    )
+    assert store.load()["a"]["social_energy"] == 1.0
+    global_state = store.load_global()
+    assert global_state["proactive_sent_today"] == 3
+    assert global_state["daily_reset_date"] == "2026-01-01"
+
+
+def test_global_payload_absent_returns_empty(tmp_path):
+    store = StateStore(tmp_path / "state.json")
+    store.save({"a": {"social_energy": 1.0}})
+    assert store.load_global() == {}
