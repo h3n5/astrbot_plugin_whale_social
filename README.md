@@ -39,20 +39,40 @@
 
 ## 安装
 
+**前置要求**：AstrBot 4.5.7+（`astrbot_version: ">=4.5.7,<5"`）。插件依赖只有 `tzdata`（Windows / 精简镜像上 `zoneinfo` 需要），AstrBot 加载插件时会按 `requirements.txt` 自动安装，无需手动操作。
+
+### 方式一：WebUI 从仓库安装（推荐）
+
+1. 打开 AstrBot WebUI → **插件管理**，选择「安装插件 / 从仓库安装」。
+2. 填入仓库地址：
+
+   ```
+   https://github.com/h3n5/astrbot_plugin_whale_social
+   ```
+
+3. 安装完成后，在插件管理中确认「鲸鱼娘社交引擎」已启用；如未自动启用请手动启用（或重启 AstrBot）。
+
+### 方式二：手动安装
+
 1. 将本仓库放入 AstrBot 插件目录，目录名保持 `astrbot_plugin_whale_social`：
 
-   ```
-   <AstrBot>/data/plugins/astrbot_plugin_whale_social/
+   ```bash
+   cd <AstrBot>/data/plugins
+   git clone https://github.com/h3n5/astrbot_plugin_whale_social
    ```
 
-2. 重启 AstrBot，在 WebUI → 插件管理中找到“鲸鱼娘社交引擎”并启用。
+   也可以下载仓库 zip 后解压为同名目录。
 
-3. 打开插件配置：
-   - 保持 `dry_run = true` 先观察；
+2. 重启 AstrBot，在 WebUI → 插件管理中确认插件已加载并启用。
+
+### 安装后配置
+
+1. 打开插件配置：
+   - 建议先开启 `dry_run`（演练模式）观察；
    - 在 `group_allowlist` 中填入要启用的群 **UMO**（可用 `/sid` 获取）；
    - 确认 `provider_id` 留空即可复用当前会话模型，或显式指定。
 
-4. 观察日志/`/ws status` 一段时间后，再关闭 `dry_run`。
+2. 观察日志 / `/ws status` 一段时间，确认决策符合预期后，再关闭 `dry_run`。
 
 > **运营前提**：目标群应处于“被 @ / 唤醒才回复”模式（AstrBot 默认）。若开启“回复所有群消息”，默认 agent 会与本插件抢发消息。
 
@@ -86,6 +106,7 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 | `send_failure_backoff_seconds` | int | `300` | 发送/Provider 失败后的初始退避秒数 |
 | `max_failure_backoff_seconds` | int | `3600` | 指数退避上限 |
 | `llm_failure_backoff_seconds` | int | `60` | 决策模型调用失败 / 无效 JSON 后的退避秒数；`0` = 不退避 |
+| `llm_timeout_seconds` | int | `60` | 等待决策模型响应的最长秒数，超时按失败退避；`0` = 不限制 |
 | `timezone` | string | `Asia/Shanghai` | 每日配额、跨日重置与静默时段使用的 IANA 时区；留空用本机时区 |
 | `max_group_states` | int | `100` | 最多追踪群数，超出按最近活跃保留；`0` = 不限制 |
 | `state_ttl_seconds` | int | `604800` | 长期不活跃群状态的淘汰秒数（7 天）；`0` = 不淘汰 |
@@ -108,6 +129,7 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 | `negative_keywords` | text | `""` | 每行一个，命中则直接放弃本次参与 |
 | `group_keyword_overrides` | object | `{}` | 形如 `{"<umo>": "关键词1\n关键词2"}` |
 | `output_blocklist` | text | `""` | 每行一个，回复命中则丢弃 |
+| `max_reply_length` | int | `200` | 主动回复的最大字符数，超出截断；`0` = 不限制 |
 | `use_astrbot_memory` | bool | `true` | 预留：读取 AstrBot 会话历史作为上下文（见「已知限制」） |
 | `memory_writeback` | bool | `true` | 主动发言成功后写回会话记忆 |
 | `inject_group_context` | bool | `true` | 正常 LLM 请求时注入简短群情 |

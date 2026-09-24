@@ -11,7 +11,7 @@ desc: |
   默认 agent，本插件只观察、不回复、不停止事件传播。
 version: 0.2.2
 author: mind-melt
-repo: https://github.com/your-name/astrbot_plugin_whale_social
+repo: https://github.com/h3n5/astrbot_plugin_whale_social
 astrbot_version: ">=4.5.7,<5"
 tags:
   - social
