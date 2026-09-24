@@ -29,14 +29,14 @@ def build_group_hint(
     config: "PluginConfig",
     now: float,
 ) -> Optional[str]:
-    """Short dynamic context injected into normal LLM requests.
+    """Short dynamic context for LLM prompts.
 
-    Returns ``None`` when injection is disabled. The block is meant to be
-    marked temporary so it never pollutes the persisted system prompt.
+    Used in two places: the proactive decision prompt (always, so the decision
+    model sees the room's pulse) and the reply-injection into normal LLM
+    requests (gated by ``inject_group_context`` at the adapter layer in
+    ``main.py``). The block is meant to be marked temporary so it never
+    pollutes the persisted system prompt.
     """
-    if not config.inject_group_context:
-        return None
-
     last_user_gap = now - state.last_user_message_time if state.last_user_message_time else 0.0
     lines = [
         "<dynamic_context>",
