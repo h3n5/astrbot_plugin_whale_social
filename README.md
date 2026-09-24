@@ -8,8 +8,7 @@
 
 - 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
 - 当前版本：`0.2.1`
-- 设计文档：见 [`astrbot_plugin_whale_social_PLAN.md`](./astrbot_plugin_whale_social_PLAN.md)
-- V2 设计（会话线程 / Debounce / 群级决策）：见 [`astrbot_plugin_whale_social_PLAN_v2.md`](./astrbot_plugin_whale_social_PLAN_v2.md)（已在 `0.2.0` 落地）
+- 设计文档（本地 `docs/`，不随仓库发布）：`docs/astrbot_plugin_whale_social_PLAN.md`、`docs/astrbot_plugin_whale_social_PLAN_v2.md`（V2 会话线程 / Debounce / 群级决策，已在 `0.2.1` 落地）
 
 ---
 
@@ -248,7 +247,7 @@ python -m pytest -q
 - 决策与回复目前为**一次** LLM 调用（同一次 JSON 同时给出 `action`、`thread_id`、`target` 与 `reply`），计划中的“两阶段分离”尚未拆分。
 - 未实现审计日志与影子模式指标。
 - 未实现非文本消息在入口处的显式归一、`state_revision`/发送 reservation（当前用 `pending` + 发送前复检替代）。
-- V2 剩余：话题 embedding、群/用户画像、每群人格、WebUI 会话视图。详见 [`astrbot_plugin_whale_social_PLAN_v2.md`](./astrbot_plugin_whale_social_PLAN_v2.md)。
+- V2 剩余：话题 embedding、群/用户画像、每群人格、WebUI 会话视图。详见本地设计文档 `docs/astrbot_plugin_whale_social_PLAN_v2.md`（不随仓库发布）。
 
 > `timezone` 依赖 IANA 时区数据库；Windows 等环境由 `requirements.txt` 自动安装 `tzdata`。若无法解析，插件会安静回退到本机时区。
 

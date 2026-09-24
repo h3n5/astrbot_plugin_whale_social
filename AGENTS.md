@@ -2,11 +2,13 @@
 
 ## Project Structure & Module Organization
 
-This repository currently contains the design material for the planned AstrBot
-plugin `astrbot_plugin_whale_social`:
+This repository contains the AstrBot plugin `astrbot_plugin_whale_social`:
 
-- `astrbot_plugin_whale_social_PLAN.md` is the authoritative implementation
-  plan and acceptance checklist.
+- `docs/astrbot_plugin_whale_social_PLAN.md` is the authoritative
+  implementation plan and acceptance checklist. The `docs/` folder is
+  git-ignored and kept local only; do not commit it.
+- `docs/astrbot_plugin_whale_social_PLAN_v2.md` covers the conversation
+  threads / debounce / group-level decision design.
 - `transcript.txt` preserves the source product discussion; treat it as
   reference material, not executable code.
 

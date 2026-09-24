@@ -8,3 +8,6 @@ venv/
 
 # Plugin runtime state (may contain real group UMO / chat data)
 data/
+
+# Local design docs (kept on disk, not published)
+/docs/
