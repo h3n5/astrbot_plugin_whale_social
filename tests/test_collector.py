@@ -175,3 +175,23 @@ def test_format_messages_handles_empty_and_non_text():
     )
     assert "[image]" in rendered
 
+
+
+def test_format_messages_uses_configured_timezone():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    collector = _collector(timezone="UTC")
+    stamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+    rendered = collector.format_messages(
+        [{"sender": "u", "text": "hi", "kind": "text", "timestamp": stamp}]
+    )
+    assert rendered == "[04:00:00] u: hi"
+
+
+def test_format_messages_tolerates_bad_timestamps():
+    collector = _collector()
+    rendered = collector.format_messages(
+        [{"sender": "u", "text": "hi", "kind": "text", "timestamp": "bad"}]
+    )
+    assert "--:--:--" in rendered

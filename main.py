@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -21,6 +20,7 @@ from core.config import PluginConfig
 from core.content import normalize_content
 from core.engine import SocialEngine
 from core.memory import build_group_hint, build_writeback_user_text
+from core.timeutil import local_datetime
 from storage.state_store import StateStore
 
 PLUGIN_NAME = "astrbot_plugin_whale_social"
@@ -373,7 +373,7 @@ class WhaleSocialPlugin(Star):
         if state is None:
             yield event.plain_result(f"本群暂无状态。上次决策：{decision}")
             return
-        moment = datetime.now()
+        moment = local_datetime(time.time(), self.cfg.timezone)
         backoff = ""
         if state.send_blocked_until > time.time():
             backoff = f"失败退避剩余：{int(state.send_blocked_until - time.time())}s\n"

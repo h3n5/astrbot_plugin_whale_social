@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 from core.cooldown import note_human_reply, open_reply_window, schedule_next_speak
 from core.models import ChatMessage
+from core.timeutil import local_datetime
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from core.config import PluginConfig
@@ -143,8 +143,10 @@ class MessageCollector:
         for item in messages:
             try:
                 stamp = float(item.get("timestamp", 0.0))
-                ts = datetime.fromtimestamp(stamp).strftime("%H:%M:%S")
-            except (TypeError, ValueError, OSError):
+                # Same timezone as quotas / quiet hours, so the transcript
+                # shown to the model (and in ws status) matches configuration.
+                ts = local_datetime(stamp, self.config.timezone).strftime("%H:%M:%S")
+            except (TypeError, ValueError, OSError, OverflowError):
                 ts = "--:--:--"
             mark = " [鲸鱼娘]" if item.get("is_bot") else ""
             text = str(item.get("text", ""))
