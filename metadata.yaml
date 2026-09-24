@@ -1,0 +1,20 @@
+name: astrbot_plugin_whale_social
+display_name: 鲸鱼娘社交引擎
+short_desc: 让群聊里的鲸鱼娘更自然地潜水、观察和主动参与聊天。
+desc: |
+  鲸鱼娘群聊主动社交插件（只做主动层）。
+
+  通过群聊活跃度、话题兴趣、社交能量、冷却时间和 LLM 判断，
+  控制机器人什么时候应该主动参与群聊；主动消息会写回 AstrBot 会话记忆。
+
+  安全默认：群白名单默认关闭，必须显式逐群开启；被 @ 的消息交给 AstrBot
+  默认 agent，本插件只观察、不回复、不停止事件传播。
+version: 0.1.0
+author: mind-melt
+repo: https://github.com/your-name/astrbot_plugin_whale_social
+astrbot_version: ">=4.5.7,<5"
+tags:
+  - social
+  - proactive
+  - group-chat
+  - whale

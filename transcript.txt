@@ -1,0 +1,2936 @@
+TITLE: 群聊机器人策略
+MODEL: GPT-5.6 Luna
+
+===== user -> all [text] =====
+对于群聊里添加机器人来主动聊天的策略，要怎么平衡是否打扰对话和产时间静默，让机器人更像一个真实的人一样来参与进来呢
+
+===== system -> all [text] =====
+
+
+===== system -> all [text] =====
+
+
+===== system -> all [text] =====
+
+
+===== system -> all [text] =====
+
+
+===== system -> all [text] =====
+
+
+===== assistant -> all [model_editable_context] =====
+""
+
+===== system -> all [text] =====
+
+
+===== assistant -> all [text] =====
+如果目标是让群聊机器人像“真实群友”，核心其实不是**增加主动发言次数**，而是让它具备一种真实人的特征：
+
+> **大多数时候在潜水，偶尔参与；有兴趣才说话；说完不会连续刷屏；没人接话时会自然沉默。**
+
+我比较推荐把策略设计成 **「感知 → 兴趣判断 → 冷却 → 发言」** 四层，而不是简单设置“每隔 N 分钟说一句”。
+
+### 1. 先定义机器人的“存在感”
+
+可以把机器人一天的行为粗略控制成：
+
+| 场景 | 行为 |
+|---|---|
+| 群里没人说话 | **不说话** |
+| 普通闲聊 | 大部分时候潜水 |
+| 出现它感兴趣的话题 | 有概率插一句 |
+| 有人直接 @它 | 基本必答 |
+| 有人问它擅长的问题 | 较高概率回答 |
+| 群友正在激烈讨论 | 偶尔参与，但不要连续插入 |
+| 自己上一句话没人理 | **明显降低再次主动发言概率** |
+| 连续多人互动 | 逐渐提高参与概率 |
+| 长时间沉默 | 可以偶尔制造一次轻微存在感 |
+
+这里有一个很重要的原则：
+
+**“主动聊天”应该是低频事件，而不是机器人的默认状态。**
+
+---
+
+## 2. 不要固定时间发言，用“随机机会窗口”
+
+例如不要：
+
+```text
+每 10 分钟主动说一句
+```
+
+这样非常容易变成机器人。
+
+可以改成：
+
+```text
+每隔 1~3 分钟进行一次判断
+        ↓
+现在适合说话吗？
+        ↓
+计算一个主动发言概率
+        ↓
+随机决定是否发言
+```
+
+例如基础概率：
+
+```text
+普通闲聊       2%
+相关话题       10%
+机器人感兴趣话题 20%
+有人提到机器人 50%
+直接 @机器人    95%
+```
+
+但最终概率还要受到**最近发言、群聊活跃度、机器人自己的冷却时间**影响。
+
+---
+
+# 3. 最重要的是“群聊状态机”
+
+可以把机器人分成几个状态：
+
+```text
+        ┌──────────────┐
+        │    潜水       │
+        └──────┬───────┘
+               │
+          发现感兴趣话题
+               ↓
+        ┌──────────────┐
+        │   观察中      │
+        └──────┬───────┘
+               │
+          判断值得参与
+               ↓
+        ┌──────────────┐
+        │   准备发言    │
+        └──────┬───────┘
+               │
+             发言
+               ↓
+        ┌──────────────┐
+        │   发言冷却    │
+        └──────┬───────┘
+               │
+          重新进入潜水
+```
+
+尤其是**观察中**非常重要。
+
+例如群里：
+
+> A：这个活动也太难了  
+> B：确实，我打了三个小时  
+> C：主要是最后那个 Boss  
+> D：我直接放弃了
+
+机器人不要看到第一句话就：
+
+> 鲸鱼娘：哈哈哈哈确实！
+
+而应该观察几条消息。
+
+到了：
+
+> C：主要是最后那个 Boss
+
+如果机器人对这个游戏 Boss 很熟悉，这时候才可能加入：
+
+> 鲸鱼娘：那个 Boss 二阶段才是真的折磨人……
+
+这样就会非常像真人。
+
+---
+
+# 4. 给机器人增加“兴趣模型”
+
+这是让它像真人的关键。
+
+比如你的鲸鱼娘人格，可以定义几个兴趣：
+
+```json
+{
+  "game": 0.9,
+  "anime": 0.6,
+  "memes": 0.8,
+  "daily_chat": 0.3,
+  "technical": 0.1
+}
+```
+
+然后分析当前话题：
+
+```text
+“昨天那个副本终于过了”
+        ↓
+游戏相关性 = 0.95
+        ↓
+机器人参与意愿 ↑
+```
+
+而：
+
+```text
+“今天公司又加班了”
+        ↓
+日常闲聊 = 0.3
+        ↓
+参与意愿低
+```
+
+这比单纯让 LLM 判断“我要不要说话”稳定得多。
+
+---
+
+# 5. 加一个“群聊活跃度”参数
+
+这是另一个非常关键的因素。
+
+例如：
+
+```text
+过去 2 分钟：
+0 条消息     → 静默
+1~2 条        → 低活跃
+3~10 条       → 正常
+10~30 条      → 高活跃
+30+ 条        → 极高活跃
+```
+
+然后策略不要简单地：
+
+> 群越热闹 → 越积极
+
+实际上应该是：
+
+### 群很冷
+
+比如：
+
+> A：有人打活动吗
+
+过了 3 分钟没人说话。
+
+机器人反而**可以低概率主动说一句**：
+
+> 鲸鱼娘：刚看了一眼，今天这个活动奖励还挺怪的
+
+这种行为会让它有“在线群友”的感觉。
+
+---
+
+### 群正常聊天
+
+例如：
+
+> A：你们昨天打到几点  
+> B：两点多  
+> C：我三点才睡
+
+机器人：
+
+> **潜水**
+
+偶尔参与即可。
+
+---
+
+### 群聊特别激烈
+
+例如一分钟几十条：
+
+> A：哈哈哈哈  
+> B：笑死  
+> C：不是吧  
+> D：真的  
+> A：等等我截图给你们看  
+> B：？？？
+
+这种时候机器人最好：
+
+**降低主动发言概率。**
+
+因为真人也很难在这种高速对话里一直插话。
+
+---
+
+# 6. “说完以后没人理”要产生记忆
+
+这个非常重要。
+
+机器人：
+
+> 鲸鱼娘：这个 Boss 其实可以卡墙打
+
+然后：
+
+```text
+没人回复
+```
+
+不要：
+
+> 鲸鱼娘：而且二阶段还有一个机制……
+
+> 鲸鱼娘：其实这个副本……
+
+> 鲸鱼娘：你们可以试试……
+
+这就是典型 AI 味。
+
+应该：
+
+```text
+机器人发言
+      ↓
+等待
+      ↓
+无人回应
+      ↓
+进入更长冷却
+```
+
+甚至可以记录：
+
+```json
+{
+  "lastMessage": "...",
+  "reply_count": 0,
+  "ignored": true
+}
+```
+
+然后降低下一次主动发言概率。
+
+反过来：
+
+> 鲸鱼娘：这个 Boss 二阶段真的恶心
+
+> A：确实
+
+> 鲸鱼娘：对吧，我第一次也被它阴了
+
+这说明**这次参与获得了互动反馈**。
+
+下一次它的参与意愿可以稍微提高。
+
+这就会产生一种非常自然的：
+
+> “这个群聊它比较喜欢参与。”
+
+的感觉。
+
+---
+
+# 7. 一定要有“发言冷却”
+
+例如：
+
+```text
+普通主动发言：
+15~30 分钟
+
+刚参与过讨论：
+5~15 分钟
+
+连续主动发言：
+30~60 分钟
+
+没人回应：
+30~90 分钟
+
+被 @：
+不受主动冷却限制
+```
+
+而且不要固定。
+
+比如：
+
+```text
+random(15min, 30min)
+```
+
+比：
+
+```text
+每 20 分钟
+```
+
+自然很多。
+
+---
+
+# 8. 可以加入“偶尔自言自语”
+
+如果你想让它更像真人，可以设计一个非常低频的：
+
+### 存在感行为
+
+例如群里 2 小时没人说话。
+
+机器人可能：
+
+> 鲸鱼娘：刚刚才发现今天周四了……
+
+或者：
+
+> 鲸鱼娘：突然想起来我活动还没打
+
+但是这个概率一定要**极低**。
+
+比如：
+
+```text
+普通主动参与：2~10%
+低活跃群主动开话题：0.5~2%
+完全无上下文自言自语：<0.5%
+```
+
+否则很快就会变成：
+
+> **一个非常喜欢自言自语的机器人。**
+
+---
+
+# 9. 最好把“是否说”和“说什么”分开
+
+这是架构上我非常建议你做的。
+
+不要：
+
+```text
+LLM：
+“分析聊天并决定是否回复，如果回复就生成内容”
+```
+
+而是：
+
+```text
+消息流
+ ↓
+规则/轻量模型
+ ↓
+ShouldSpeak?
+ ↓
+否 → 什么都不做
+ ↓
+是
+ ↓
+LLM 生成回复
+```
+
+也就是：
+
+### 第一层：行为决策
+
+```text
+shouldSpeak(messageContext)
+```
+
+输出：
+
+```json
+{
+  "speak": true,
+  "reason": "interesting_topic",
+  "confidence": 0.72
+}
+```
+
+### 第二层：人格生成
+
+再让 LLM：
+
+```text
+根据当前群聊上下文，以鲸鱼娘的性格自然参与。
+不要解释自己为什么回复。
+不要为了维持对话强行发言。
+```
+
+这样可以大幅降低 token 消耗，也更容易控制机器人行为。
+
+---
+
+# 10. 我甚至建议增加一个“社交能量”
+
+可以把机器人一天的主动程度看成：
+
+```text
+socialEnergy = 0 ~ 100
+```
+
+例如：
+
+```text
+刚上线             60
+正常聊天            50
+主动说话            -10
+有人回应            +5
+连续互动            +10
+没人理              -5
+群聊太吵            -10
+长时间没人说话       +5
+```
+
+然后：
+
+```text
+socialEnergy > 70
+    → 比较愿意参与
+
+40~70
+    → 正常潜水
+
+20~40
+    → 很少主动说话
+
+<20
+    → 基本潜水
+```
+
+甚至每天随机一个“性格状态”：
+
+```text
+今天比较活跃
+今天懒洋洋
+今天喜欢吐槽
+今天话比较少
+```
+
+这样同一个机器人不会每天表现得像同一个定时器。
+
+---
+
+## 最终可以形成一个很简单的决策公式
+
+比如：
+
+```text
+SpeakScore =
+    TopicInterest
+  × ActivityFactor
+  × SocialEnergy
+  × ConversationFit
+  × RandomFactor
+  × CooldownFactor
+```
+
+例如：
+
+```text
+话题很感兴趣       0.9
+群聊活跃度          0.8
+当前社交能量        0.6
+插话自然程度        0.9
+随机因素            0.4
+冷却因素            0.7
+
+最终 = 0.9 × 0.8 × 0.6 × 0.9 × 0.4 × 0.7
+     ≈ 0.109
+```
+
+设置：
+
+```text
+SpeakScore > 0.1 → 有机会发言
+```
+
+就可以。
+
+**关键不是公式本身，而是让机器人拥有“克制”。**
+
+如果是你前面说的 **DeepSeek「鲸鱼娘」游戏群机器人**，我会把默认行为调成：
+
+> **70% 潜水 + 20% 顺着话题参与 + 8% 主动抛话题 + 2% 随机整活**
+
+而且**被 @、被提问、讨论它擅长的游戏内容时，直接绕过大部分随机限制**。
+
+这样出来的效果通常会比“每隔 X 分钟主动聊天”自然很多。
+
+===== user -> all [text] =====
+这个策略不错，如果要在astrbot 上应用，要怎么实现呢
+
+===== system -> all [text] =====
+
+
+===== system -> assistant [text] =====
+
+
+===== assistant -> web [text] =====
+
+
+===== assistant -> web.run [text] =====
+
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== system -> all [text] =====
+
+
+===== assistant -> all [thoughts] =====
+Searched 2 websites
+
+===== assistant -> all [reasoning_recap] =====
+{"content_type":"reasoning_recap","content":"Worked for a couple of seconds"}
+
+===== assistant -> all [text] =====
+可以，而且我建议**不要改 AstrBot 核心**，直接做成一个独立 Star 插件，作为“主动社交层”。AstrBot 本身已经提供消息事件监听、主动消息发送，以及直接调用当前会话 LLM 的接口，所以这个方案和它的架构比较匹配。citeturn0search0turn0search6turn0search7
+
+我会把它设计成：
+
+```text
+                    AstrBot
+                       │
+                 收到群消息
+                       │
+                       ▼
+        ┌──────────────────────────┐
+        │  WhaleSocialPlugin       │
+        │  鲸鱼娘社交控制器          │
+        └────────────┬─────────────┘
+                     │
+          ┌──────────▼──────────┐
+          │ 1. 保存群聊上下文     │
+          │ 2. 更新活跃度         │
+          │ 3. 更新社交能量       │
+          │ 4. 判断是否值得参与    │
+          └──────────┬──────────┘
+                     │
+               ShouldSpeak?
+                /         \
+              NO           YES
+               │             │
+             潜水       调用 LLM 判断
+                             │
+                             ▼
+                       生成自然回复
+                             │
+                             ▼
+                       主动发送消息
+```
+
+## 1. 最适合做成独立插件
+
+AstrBot 官方插件就是 `Star`，插件可以监听 `AstrMessageEvent`，而消息对象里面已经有：
+
+- `message_str`
+- `sender`
+- `group_id`
+- `message_id`
+- `session_id`
+- `unified_msg_origin`
+
+这些正好够我们建立群聊状态。citeturn0search1turn0search10
+
+例如：
+
+```text
+astrbot/
+└── data/
+    └── plugins/
+        └── astrbot_plugin_whale_social/
+            ├── main.py
+            ├── metadata.yaml
+            ├── _conf_schema.json
+            └── social_state.json
+```
+
+---
+
+# 2. `main.py` 不要负责所有东西
+
+我建议最终拆成：
+
+```text
+astrbot_plugin_whale_social/
+├── main.py
+├── social_engine.py
+├── context_manager.py
+├── llm_decision.py
+├── config.py
+└── data/
+    └── state.json
+```
+
+核心就是：
+
+```python
+class WhaleSocialPlugin(Star):
+
+    async def on_message(self, event):
+        # 1. 获取群
+        # 2. 保存消息
+        # 3. 更新群状态
+        # 4. 判断是否应该主动参与
+        # 5. 如果需要，调用 LLM
+        # 6. 主动发送
+```
+
+AstrBot 的事件监听可以直接通过 `@filter.event_message_type(...)` 之类的事件过滤器实现。官方文档也明确提供了消息事件监听机制。citeturn0search0
+
+---
+
+# 3. 第一层千万不要直接调用 LLM
+
+这是最重要的优化。
+
+假设一个 100 人游戏群每天 5000 条消息。
+
+如果每条消息：
+
+```text
+收到消息
+ ↓
+LLM 判断我要不要说话
+```
+
+会产生大量无意义请求。
+
+应该先用**本地规则过滤**：
+
+```python
+def should_consider(event, state):
+
+    if is_private_message(event):
+        return False
+
+    if state.cooldown_active:
+        return False
+
+    if is_bot_message(event):
+        return False
+
+    if message_too_short(event):
+        return False
+
+    if is_system_message(event):
+        return False
+
+    return True
+```
+
+甚至可以先做到：
+
+```text
+普通消息
+    ↓
+是否 @ 鲸鱼娘？
+    ├─ YES → 立即进入 LLM
+    │
+    └─ NO
+       ↓
+是否包含感兴趣关键词？
+       ├─ NO → 98% 直接忽略
+       │
+       └─ YES → 进入评分
+```
+
+这样成本会低很多。
+
+---
+
+# 4. 然后建立每个群自己的状态
+
+例如：
+
+```python
+@dataclass
+class GroupState:
+    messages: deque
+    last_bot_message_time: float
+    last_user_message_time: float
+
+    message_count_1m: int
+    message_count_5m: int
+
+    social_energy: float
+
+    last_topic: str
+    last_bot_was_ignored: bool
+
+    consecutive_bot_messages: int
+```
+
+例如：
+
+```json
+{
+  "group_id": "123456",
+  "social_energy": 63,
+  "message_count_5m": 12,
+  "last_topic": "某游戏副本",
+  "last_bot_was_ignored": false,
+  "last_bot_message_time": 1780000000
+}
+```
+
+**每个群独立维护。**
+
+这样 A 群可以很活跃：
+
+```text
+鲸鱼娘：很喜欢参与
+```
+
+B 群很冷：
+
+```text
+鲸鱼娘：偶尔说话
+```
+
+C 群没人理机器人：
+
+```text
+鲸鱼娘：基本潜水
+```
+
+这个差异会非常重要。
+
+---
+
+# 5. 给它一个 `SpeakScore`
+
+我会把之前说的策略真正落成代码：
+
+```python
+score = 1.0
+
+score *= topic_interest
+score *= activity_factor
+score *= social_energy
+score *= conversation_fit
+score *= cooldown_factor
+score *= random_factor
+```
+
+然后：
+
+```python
+if score < 0.08:
+    return False
+
+return random.random() < score
+```
+
+例如：
+
+```text
+普通闲聊：
+
+topic_interest     0.2
+activity_factor    0.8
+social_energy      0.7
+conversation_fit   0.5
+cooldown           0.5
+random             0.5
+
+最终 ≈ 0.014
+```
+
+基本不会说。
+
+而：
+
+```text
+“这个 Boss 怎么打？”
+```
+
+可能：
+
+```text
+topic_interest     0.95
+conversation_fit   0.95
+```
+
+最终就可能达到 20%~50%。
+
+---
+
+# 6. @机器人直接走另一条通道
+
+这个不要进入随机系统。
+
+例如：
+
+```python
+if event.is_at_or_wake_command:
+    await reply_directly(event)
+    return
+```
+
+所以：
+
+```text
+群友：
+
+@鲸鱼娘 这个活动什么时候结束？
+```
+
+应该：
+
+> 直接回答。
+
+而不是：
+
+> 今天社交能量不足，拒绝回答。
+
+否则会非常反直觉。
+
+---
+
+# 7. LLM 只负责“理解”和“生成”
+
+我建议 LLM 接收：
+
+```text
+【人格】
+你是鲸鱼娘，一个游戏群里的虚拟群友。
+
+【当前群聊】
+A：昨天那个副本你们过了吗
+B：没有
+C：最后 Boss 太变态了
+D：我已经放弃了
+
+【当前消息】
+C：最后 Boss 太变态了
+
+【社交状态】
+- 当前群聊活跃度：正常
+- 鲸鱼娘最近 27 分钟没有发言
+- 上次发言有人回应
+- 当前话题：游戏副本
+- 鲸鱼娘对此话题兴趣：高
+
+判断：
+1. 是否自然参与
+2. 如果参与，说什么
+```
+
+然后要求返回：
+
+```json
+{
+  "speak": true,
+  "reply": "那个 Boss 二阶段才是真的折磨人，我第一次也是卡在那里",
+  "reason": "natural_topic_match"
+}
+```
+
+---
+
+# 8. 这里甚至可以让 LLM 有第三个选择：`WAIT`
+
+我很推荐这个。
+
+不要：
+
+```text
+SPEAK
+SILENT
+```
+
+而是：
+
+```text
+SPEAK
+WAIT
+IGNORE
+```
+
+区别：
+
+### IGNORE
+
+这个话题跟我没关系。
+
+```text
+A：今天公司食堂又难吃了
+```
+
+→ `IGNORE`
+
+---
+
+### WAIT
+
+我感兴趣，但是现在不是插话时机。
+
+```text
+A：这个 Boss...
+B：确实...
+C：我昨天...
+D：然后...
+```
+
+→ `WAIT`
+
+等讨论自然发展。
+
+---
+
+### SPEAK
+
+已经形成一个适合插入的节点。
+
+```text
+C：这个 Boss 二阶段...
+```
+
+→ `SPEAK`
+
+这会比单纯判断 yes/no 自然很多。
+
+---
+
+# 9. 主动发送其实 AstrBot 已经支持
+
+这一点正好适合你的需求。
+
+AstrBot 官方提供了：
+
+```python
+self.context.send_message(
+    event.unified_msg_origin,
+    message_chain
+)
+```
+
+可以把 `unified_msg_origin` 保存下来，然后稍后主动发送，而不是必须在当前消息事件里立即回复。citeturn0search6
+
+因此你可以：
+
+```text
+收到消息
+   ↓
+发现话题有意思
+   ↓
+WAIT 2~8 秒
+   ↓
+重新检查群聊
+   ↓
+如果话题还在
+   ↓
+发送
+```
+
+这比：
+
+```text
+收到消息
+↓
+立刻回复
+```
+
+自然很多。
+
+---
+
+# 10. 甚至可以做“延迟参与”
+
+例如：
+
+```text
+15:20:01 A：这个 Boss 怎么打？
+15:20:03 B：带奶
+15:20:05 C：我感觉还是输出不够
+15:20:08 鲸鱼娘正在观察
+15:20:12 鲸鱼娘：这个 Boss 我记得其实要先处理那个小怪
+```
+
+这种效果会非常接近真人。
+
+但是**不要随机延迟到几分钟**。
+
+我建议：
+
+```text
+直接回应：0.5~2 秒
+
+自然插话：2~8 秒
+
+正在思考/观察：5~15 秒
+```
+
+并且延迟期间如果群聊已经跑到另一个话题：
+
+```text
+取消发送
+```
+
+这个细节非常重要。
+
+---
+
+# 11. 还有一个特别适合你的功能：群聊“话题窗口”
+
+保存最近：
+
+```text
+10~30 条消息
+```
+
+然后不断计算：
+
+```text
+当前主题：
+游戏 A 副本
+```
+
+当：
+
+```text
+A：副本怎么样
+B：太难了
+C：Boss...
+D：我打了三次
+```
+
+这些都属于一个 conversation window。
+
+如果突然：
+
+```text
+E：对了明天有人上班吗
+```
+
+就：
+
+```text
+topic changed
+```
+
+旧的主动回复任务直接取消。
+
+这样可以避免非常经典的 AI：
+
+> 鲸鱼娘：那个 Boss 确实很难  
+>   
+> A：对了明天有人上班吗  
+>   
+> 鲸鱼娘：其实 Boss 二阶段……
+
+😂
+
+---
+
+# 12. 最终我建议你做成这个架构
+
+```text
+                 AstrBot Message Event
+                         │
+                         ▼
+                ┌─────────────────┐
+                │ Message Collector│
+                └────────┬────────┘
+                         │
+                         ▼
+                ┌─────────────────┐
+                │ Group State      │
+                │                 │
+                │ 最近消息          │
+                │ 活跃度            │
+                │ 当前话题          │
+                │ 社交能量          │
+                │ 冷却时间          │
+                └────────┬────────┘
+                         │
+                         ▼
+                ┌─────────────────┐
+                │ Rule Filter      │
+                └────────┬────────┘
+                         │
+                    值得考虑？
+                    /       \
+                  NO         YES
+                  │           │
+                ignore        ▼
+                      ┌────────────────┐
+                      │ Social Scorer  │
+                      └───────┬────────┘
+                              │
+                    ┌─────────┼─────────┐
+                    ▼         ▼         ▼
+                  IGNORE     WAIT      SPEAK
+                              │         │
+                              │         ▼
+                              │      LLM生成
+                              │         │
+                              ▼         ▼
+                         重新观察     延迟发送
+                                        │
+                                        ▼
+                                 更新社交状态
+```
+
+---
+
+## 我会建议你第一版不要做得太复杂
+
+**V1 就实现这 6 个东西：**
+
+```text
+① 每群独立消息历史
+② 每群独立冷却
+③ 群聊活跃度
+④ 话题兴趣判断
+⑤ SpeakScore
+⑥ 主动发送
+```
+
+先跑起来。
+
+然后 V2 再加：
+
+```text
+⑦ socialEnergy
+⑧ SPEAK / WAIT / IGNORE
+⑨ 延迟参与
+⑩ 话题窗口
+⑪ “没人理我”记忆
+⑫ 不同群不同性格
+```
+
+这样非常适合你现在的**鲸鱼娘游戏群机器人**。
+
+而且我认为最值得做的是把它独立成一个 **`astrbot_plugin_social`**，不要把“主动聊天逻辑”塞进鲸鱼娘人格 Prompt。**人格负责“她是谁”，Social Plugin 负责“她什么时候想说话”。** 这两个东西分离以后，你以后换 DeepSeek、GLM、Qwen，甚至换整套人格，都不用重写社交系统。
+
+AstrBot 当前文档也支持通过 `context.llm_generate()` 调用当前会话模型，因此这个插件可以直接复用你现有的 LLM 配置，而不需要再配置一套 API。citeturn0search7
+
+如果你愿意，我下一步可以直接按照**当前 AstrBot 4.x 插件 API**给你写一个可直接放进 `data/plugins` 的 `astrbot_plugin_whale_social` 第一版，包含 `main.py + _conf_schema.json + metadata.yaml`，并把**鲸鱼娘的主动聊天策略全部做成配置项**。
+
+===== user -> all [text] =====
+Write a first version of astrbot_plugin_whale_social according to the current AstrBot 4.x plugin API
+
+===== system -> all [text] =====
+
+
+===== system -> all [text] =====
+
+
+===== system -> assistant [text] =====
+
+
+===== assistant -> web [text] =====
+
+
+===== assistant -> web.run [text] =====
+
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== assistant -> web.run [text] =====
+
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== assistant -> web.run [text] =====
+
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== system -> all [text] =====
+
+
+===== assistant -> web.run [text] =====
+
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== tool(web.run) -> all [text] =====
+The output of this plugin was redacted.
+
+===== system -> all [text] =====
+
+
+===== assistant -> all [thoughts] =====
+Searched 4 websites
+
+===== assistant -> all [reasoning_recap] =====
+{"content_type":"reasoning_recap","content":"Worked for 4s"}
+
+===== assistant -> all [text] =====
+可以。下面这个版本我会按**当前 AstrBot 4.x SDK**来写，而不是沿用旧版 `@register`/API 示例。当前文档确认插件通过 `metadata.yaml` 识别，`_conf_schema.json` 可以自动生成 WebUI 配置；`Context.llm_generate()` 和 `Context.send_message()` 都是当前 SDK 可用接口。citeturn0search3turn3search1turn2search0
+
+我建议第一版先做成一个**轻量、可直接运行的 MVP**：
+
+- 每个群独立状态
+- 最近消息窗口
+- 群活跃度
+- 社交能量
+- 主动发言冷却
+- @机器人直接触发
+- 本地 `SpeakScore`
+- `IGNORE / WAIT / SPEAK`
+- LLM 决定是否参与
+- LLM 生成最终回复
+- 延迟发送
+- 持久化状态
+- 全部关键参数进入 AstrBot WebUI 配置
+
+---
+
+# 目录
+
+```text
+astrbot_plugin_whale_social/
+├── main.py
+├── metadata.yaml
+├── _conf_schema.json
+└── .gitignore
+```
+
+AstrBot 当前推荐插件名以 `astrbot_plugin_` 开头，`metadata.yaml` 是插件识别所必需的。citeturn0search3
+
+---
+
+## 1. `metadata.yaml`
+
+```yaml
+name: astrbot_plugin_whale_social
+display_name: 鲸鱼娘社交引擎
+short_desc: 让群聊里的鲸鱼娘更自然地潜水、观察和主动参与聊天。
+desc: |
+  鲸鱼娘群聊主动社交插件。
+
+  通过群聊活跃度、话题兴趣、社交能量、冷却时间和 LLM 判断，
+  控制机器人什么时候应该主动参与群聊。
+
+version: 0.1.0
+author: mind-melt
+repo: https://github.com/your-name/astrbot_plugin_whale_social
+
+astrbot_version: ">=4.17,<5"
+
+tags:
+  - social
+  - proactive
+  - group-chat
+  - whale
+```
+
+`astrbot_version` 支持 PEP 440 风格的版本约束，目前官方文档就是这样定义的。citeturn0search3
+
+---
+
+# 2. `_conf_schema.json`
+
+第一版不要把配置搞得太复杂。
+
+```json
+{
+  "enabled": {
+    "description": "启用主动社交",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后插件仍然监听消息，但不会主动发言。"
+  },
+
+  "min_message_length": {
+    "description": "最小消息长度",
+    "type": "int",
+    "default": 2,
+    "hint": "太短的消息不会触发主动社交判断。"
+  },
+
+  "context_message_limit": {
+    "description": "上下文消息数量",
+    "type": "int",
+    "default": 20,
+    "hint": "发送给社交判断模型的最近群聊消息数量。"
+  },
+
+  "min_cooldown_seconds": {
+    "description": "最小主动发言冷却",
+    "type": "int",
+    "default": 900,
+    "hint": "机器人主动发言后，至少等待多少秒。"
+  },
+
+  "max_cooldown_seconds": {
+    "description": "最大主动发言冷却",
+    "type": "int",
+    "default": 1800,
+    "hint": "主动发言后的随机冷却上限。"
+  },
+
+  "idle_trigger_minutes": {
+    "description": "低活跃主动参与间隔",
+    "type": "int",
+    "default": 30,
+    "hint": "群聊长时间安静时，允许进行一次低概率主动参与判断。"
+  },
+
+  "base_speak_probability": {
+    "description": "基础主动发言概率",
+    "type": "float",
+    "default": 0.08,
+    "hint": "本地评分通过后，最终主动发言概率的基础值。",
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.01
+    }
+  },
+
+  "high_interest_bonus": {
+    "description": "高兴趣话题加成",
+    "type": "float",
+    "default": 1.8,
+    "hint": "游戏、熟悉话题等高兴趣内容的主动参与倍率。",
+    "slider": {
+      "min": 1,
+      "max": 3,
+      "step": 0.1
+    }
+  },
+
+  "energy_initial": {
+    "description": "初始社交能量",
+    "type": "float",
+    "default": 0.6,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  },
+
+  "energy_max": {
+    "description": "最大社交能量",
+    "type": "float",
+    "default": 1.0,
+    "slider": {
+      "min": 0.1,
+      "max": 2,
+      "step": 0.05
+    }
+  },
+
+  "provider_id": {
+    "description": "主动社交使用的模型",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用当前会话的模型。"
+  },
+
+  "interest_keywords": {
+    "description": "感兴趣关键词",
+    "type": "text",
+    "default": "游戏\n副本\nBoss\n活动\n抽卡\n角色\n装备\n攻略\n剧情\n动漫\n老婆\n整活\n哈哈\n笑死",
+    "hint": "每行一个关键词。命中关键词时会提高参与意愿。"
+  },
+
+  "persona_prompt": {
+    "description": "鲸鱼娘社交人格",
+    "type": "text",
+    "default": "你是鲸鱼娘，一个游戏群里的虚拟群友。\n\n你喜欢游戏、动漫和群聊里的各种趣事。\n你平时比较喜欢潜水，不会为了说话而说话。\n看到自己感兴趣的话题时，会像普通群友一样自然参与。\n\n你的回复应该简短、自然、口语化。\n不要主动强调自己是 AI、机器人或程序。\n不要解释自己的行为逻辑。\n不要为了延续聊天而强行提问。\n不要连续刷屏。",
+    "hint": "控制鲸鱼娘的说话风格。"
+  }
+}
+```
+
+当前 AstrBot `_conf_schema.json` 支持 `string`、`text`、`int`、`float`、`bool`、`object`、`list`、`file`、`template_list` 等配置类型。citeturn2search0turn2search6
+
+---
+
+# 3. `main.py`
+
+这个就是核心。
+
+```python
+import asyncio
+import json
+import random
+import re
+import time
+from collections import defaultdict, deque
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Optional
+
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.star import Context, Star
+
+
+@dataclass
+class ChatMessage:
+    sender: str
+    text: str
+    timestamp: float
+    is_bot: bool = False
+
+
+@dataclass
+class GroupState:
+    messages: list
+    social_energy: float = 0.6
+    last_bot_message_time: float = 0
+    last_user_message_time: float = 0
+    last_bot_ignored: bool = False
+    consecutive_bot_messages: int = 0
+    last_topic: str = ""
+
+    def add_message(self, message: ChatMessage, limit: int):
+        self.messages.append(asdict(message))
+
+        if len(self.messages) > limit:
+            self.messages = self.messages[-limit:]
+
+        if not message.is_bot:
+            self.last_user_message_time = message.timestamp
+
+
+class WhaleSocialPlugin(Star):
+
+    def __init__(
+        self,
+        context: Context,
+        config: AstrBotConfig,
+    ):
+        super().__init__(context)
+
+        self.context = context
+        self.config = config
+
+        self.states: dict[str, GroupState] = {}
+
+        self.pending_tasks: dict[str, asyncio.Task] = {}
+
+        self.data_dir = (
+            Path(__file__).parent
+            / "data"
+        )
+
+        self.data_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        self.state_file = (
+            self.data_dir
+            / "state.json"
+        )
+
+    async def initialize(self):
+        await self._load_state()
+
+        logger.info(
+            "[WhaleSocial] 鲸鱼娘社交引擎已启动"
+        )
+
+    async def terminate(self):
+        for task in self.pending_tasks.values():
+            if not task.done():
+                task.cancel()
+
+        self.pending_tasks.clear()
+
+        await self._save_state()
+
+        logger.info(
+            "[WhaleSocial] 鲸鱼娘社交引擎已停止"
+        )
+
+    # =========================================================
+    # Message Listener
+    # =========================================================
+
+    @filter.event_message_type(
+        filter.EventMessageType.ALL
+    )
+    async def on_message(
+        self,
+        event: AstrMessageEvent,
+    ):
+
+        if not self.config.get(
+            "enabled",
+            True,
+        ):
+            return
+
+        text = (
+            event.message_str
+            or ""
+        ).strip()
+
+        if not text:
+            return
+
+        if text.startswith("/"):
+            return
+
+        # 获取 session / 群
+        group_id = self._get_group_id(event)
+
+        # 私聊暂时不处理
+        if not group_id:
+            return
+
+        state = self._get_state(group_id)
+
+        now = time.time()
+
+        is_bot = self._is_bot_message(event)
+
+        sender = self._get_sender(event)
+
+        message = ChatMessage(
+            sender=sender,
+            text=text,
+            timestamp=now,
+            is_bot=is_bot,
+        )
+
+        state.add_message(
+            message,
+            self._context_limit(),
+        )
+
+        # Bot 自己的消息只记录，不再次触发
+        if is_bot:
+            return
+
+        # 处理社交能量
+        self._update_energy(
+            state,
+            text,
+        )
+
+        # @机器人
+        if self._is_at_me(event):
+            await self._handle_direct_mention(
+                event,
+                group_id,
+                state,
+            )
+            return
+
+        # 太短
+        if len(text) < self._min_message_length():
+            return
+
+        # 当前正在等待一个主动回复
+        if group_id in self.pending_tasks:
+            return
+
+        # 本地门控
+        if not self._should_consider(
+            state,
+            text,
+        ):
+            return
+
+        # 计算本地分数
+        score = self._calculate_speak_score(
+            state,
+            text,
+        )
+
+        probability = (
+            self._base_probability()
+            * score
+        )
+
+        probability = min(
+            probability,
+            0.8,
+        )
+
+        logger.debug(
+            f"[WhaleSocial] "
+            f"group={group_id} "
+            f"score={score:.3f} "
+            f"prob={probability:.3f}"
+        )
+
+        if random.random() > probability:
+            return
+
+        # 开始异步判断
+        task = asyncio.create_task(
+            self._evaluate_and_reply(
+                event,
+                group_id,
+            )
+        )
+
+        self.pending_tasks[group_id] = task
+
+        task.add_done_callback(
+            lambda _: self.pending_tasks.pop(
+                group_id,
+                None,
+            )
+        )
+
+    # =========================================================
+    # Main Social Decision
+    # =========================================================
+
+    async def _evaluate_and_reply(
+        self,
+        event: AstrMessageEvent,
+        group_id: str,
+    ):
+
+        state = self._get_state(group_id)
+
+        # 重新检查冷却
+        if self._in_cooldown(state):
+            return
+
+        decision = await self._llm_decide(
+            state,
+        )
+
+        if not decision:
+            return
+
+        action = decision.get(
+            "action",
+            "IGNORE",
+        )
+
+        logger.debug(
+            f"[WhaleSocial] "
+            f"decision={action}"
+        )
+
+        if action == "IGNORE":
+            state.last_bot_ignored = True
+            return
+
+        if action == "WAIT":
+            state.last_bot_ignored = False
+            return
+
+        if action != "SPEAK":
+            return
+
+        reply = decision.get(
+            "reply",
+            "",
+        ).strip()
+
+        if not reply:
+            return
+
+        # 延迟发送
+        delay = self._random_reply_delay()
+
+        await asyncio.sleep(delay)
+
+        # 延迟期间再次检查
+        if self._in_cooldown(state):
+            return
+
+        # 如果话题已经变化，不回复
+        if not self._topic_still_relevant(
+            state,
+            decision,
+        ):
+            logger.debug(
+                "[WhaleSocial] "
+                "话题已经变化，取消主动回复"
+            )
+            return
+
+        success = await self._send_message(
+            event,
+            reply,
+        )
+
+        if success:
+            self._after_bot_message(
+                state,
+            )
+
+            await self._save_state()
+
+    # =========================================================
+    # LLM Decision
+    # =========================================================
+
+    async def _llm_decide(
+        self,
+        state: GroupState,
+    ) -> Optional[dict]:
+
+        provider_id = (
+            self.config.get(
+                "provider_id",
+                "",
+            )
+            or await self._get_provider_id()
+        )
+
+        if not provider_id:
+            logger.warning(
+                "[WhaleSocial] "
+                "没有可用的 LLM Provider"
+            )
+            return None
+
+        context_text = self._build_context(
+            state,
+        )
+
+        system_prompt = f"""
+你是鲸鱼娘群聊社交决策器。
+
+你的任务不是回答用户，而是判断：
+“鲸鱼娘现在是否应该自然参与群聊”。
+
+人格：
+
+{self.config.get("persona_prompt", "")}
+
+行为原则：
+
+1. 大多数时候应该潜水。
+2. 不要为了说话而说话。
+3. 如果当前话题与鲸鱼娘兴趣高度相关，可以参与。
+4. 如果群聊正在高速连续聊天，不要强行插话。
+5. 如果刚刚已经发言并且没人回应，应明显降低再次发言意愿。
+6. 如果只是普通无关闲聊，可以 IGNORE。
+7. 如果话题有意思，但当前不是自然插话时机，选择 WAIT。
+8. 只有真正适合插入时才 SPEAK。
+9. 回复应该像普通群友，而不是客服。
+10. 不要解释“为什么要回复”。
+
+只允许输出 JSON：
+
+{{
+  "action": "IGNORE | WAIT | SPEAK",
+  "reason": "简短原因",
+  "topic": "当前话题",
+  "reply": "如果 SPEAK，这里填写回复；否则为空"
+}}
+"""
+
+        prompt = f"""
+当前群聊：
+
+{context_text}
+
+请判断鲸鱼娘现在是否应该参与。
+"""
+
+        try:
+
+            response = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=prompt,
+                system_prompt=system_prompt,
+            )
+
+            if not response:
+                return None
+
+            text = (
+                response.completion_text
+                or ""
+            ).strip()
+
+            return self._parse_json(
+                text,
+            )
+
+        except Exception as e:
+
+            logger.error(
+                f"[WhaleSocial] "
+                f"LLM 判断失败: {e}"
+            )
+
+            return None
+
+    # =========================================================
+    # Context
+    # =========================================================
+
+    def _build_context(
+        self,
+        state: GroupState,
+    ) -> str:
+
+        messages = state.messages[
+            -self._context_limit():
+        ]
+
+        lines = []
+
+        for message in messages:
+
+            timestamp = time.strftime(
+                "%H:%M:%S",
+                time.localtime(
+                    message["timestamp"]
+                ),
+            )
+
+            bot_mark = (
+                " [鲸鱼娘]"
+                if message["is_bot"]
+                else ""
+            )
+
+            lines.append(
+                f"[{timestamp}] "
+                f"{message['sender']}"
+                f"{bot_mark}: "
+                f"{message['text']}"
+            )
+
+        return "\n".join(lines)
+
+    # =========================================================
+    # Local Scoring
+    # =========================================================
+
+    def _calculate_speak_score(
+        self,
+        state: GroupState,
+        text: str,
+    ) -> float:
+
+        score = 1.0
+
+        # -------------------------------------
+        # 兴趣
+        # -------------------------------------
+
+        keywords = self._keywords()
+
+        matched = sum(
+            1
+            for keyword in keywords
+            if keyword.lower()
+            in text.lower()
+        )
+
+        if matched > 0:
+
+            score *= min(
+                1.0
+                + matched * 0.7,
+                self._high_interest_bonus(),
+            )
+
+        else:
+
+            score *= 0.35
+
+        # -------------------------------------
+        # 活跃度
+        # -------------------------------------
+
+        activity = self._activity(
+            state,
+        )
+
+        if activity > 20:
+            # 高速聊天反而降低插话概率
+            score *= 0.35
+
+        elif activity > 10:
+            score *= 0.7
+
+        elif activity <= 2:
+            # 冷群稍微提高主动性
+            score *= 1.2
+
+        # -------------------------------------
+        # 社交能量
+        # -------------------------------------
+
+        score *= max(
+            state.social_energy,
+            0.15,
+        )
+
+        # -------------------------------------
+        # 最近没人理
+        # -------------------------------------
+
+        if state.last_bot_ignored:
+            score *= 0.35
+
+        # -------------------------------------
+        # 连续发言
+        # -------------------------------------
+
+        if state.consecutive_bot_messages > 0:
+            score *= 0.3
+
+        return max(
+            0.0,
+            min(score, 3.0),
+        )
+
+    # =========================================================
+    # Activity
+    # =========================================================
+
+    def _activity(
+        self,
+        state: GroupState,
+    ) -> int:
+
+        now = time.time()
+
+        return sum(
+            1
+            for message in state.messages
+            if (
+                now
+                - message["timestamp"]
+                <= 60
+                and not message["is_bot"]
+            )
+        )
+
+    # =========================================================
+    # Cooldown
+    # =========================================================
+
+    def _in_cooldown(
+        self,
+        state: GroupState,
+    ) -> bool:
+
+        if not state.last_bot_message_time:
+            return False
+
+        elapsed = (
+            time.time()
+            - state.last_bot_message_time
+        )
+
+        return (
+            elapsed
+            < self._random_cooldown()
+        )
+
+    def _random_cooldown(self) -> float:
+
+        return random.uniform(
+            self.config.get(
+                "min_cooldown_seconds",
+                900,
+            ),
+            self.config.get(
+                "max_cooldown_seconds",
+                1800,
+            ),
+        )
+
+    # =========================================================
+    # Delayed Reply
+    # =========================================================
+
+    def _random_reply_delay(self) -> float:
+
+        return random.uniform(
+            2,
+            8,
+        )
+
+    # =========================================================
+    # Mention
+    # =========================================================
+
+    async def _handle_direct_mention(
+        self,
+        event: AstrMessageEvent,
+        group_id: str,
+        state: GroupState,
+    ):
+
+        # 被 @ 时绕过随机概率
+        provider_id = (
+            self.config.get(
+                "provider_id",
+                "",
+            )
+            or await self._get_provider_id()
+        )
+
+        if not provider_id:
+            return
+
+        context_text = self._build_context(
+            state,
+        )
+
+        system_prompt = f"""
+你是鲸鱼娘。
+
+{self.config.get("persona_prompt", "")}
+
+现在群友主动 @ 你。
+
+请直接自然地回答对方。
+
+要求：
+
+- 简短
+- 口语化
+- 像群友
+- 不要解释自己是 AI
+- 不要输出 JSON
+"""
+
+        prompt = f"""
+最近群聊：
+
+{context_text}
+
+请回答刚才 @ 你的群友。
+"""
+
+        try:
+
+            response = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=prompt,
+                system_prompt=system_prompt,
+            )
+
+            if not response:
+                return
+
+            reply = (
+                response.completion_text
+                or ""
+            ).strip()
+
+            if not reply:
+                return
+
+            await self._send_message(
+                event,
+                reply,
+            )
+
+            self._after_bot_message(
+                state,
+            )
+
+            await self._save_state()
+
+        except Exception as e:
+
+            logger.error(
+                f"[WhaleSocial] "
+                f"mention reply failed: {e}"
+            )
+
+    # =========================================================
+    # Send Message
+    # =========================================================
+
+    async def _send_message(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+    ) -> bool:
+
+        try:
+
+            from astrbot.api.message import MessageChain
+
+            chain = MessageChain().message(
+                text
+            )
+
+            return await self.context.send_message(
+                event.unified_msg_origin,
+                chain,
+            )
+
+        except Exception as e:
+
+            logger.error(
+                f"[WhaleSocial] "
+                f"发送消息失败: {e}"
+            )
+
+            return False
+
+    # =========================================================
+    # State
+    # =========================================================
+
+    def _get_state(
+        self,
+        group_id: str,
+    ) -> GroupState:
+
+        if group_id not in self.states:
+
+            self.states[group_id] = GroupState(
+                messages=[],
+                social_energy=self.config.get(
+                    "energy_initial",
+                    0.6,
+                ),
+            )
+
+        return self.states[group_id]
+
+    async def _load_state(self):
+
+        if not self.state_file.exists():
+            return
+
+        try:
+
+            data = json.loads(
+                self.state_file.read_text(
+                    encoding="utf-8",
+                )
+            )
+
+            for group_id, value in data.items():
+
+                self.states[group_id] = GroupState(
+                    **value,
+                )
+
+        except Exception as e:
+
+            logger.warning(
+                f"[WhaleSocial] "
+                f"读取状态失败: {e}"
+            )
+
+    async def _save_state(self):
+
+        try:
+
+            data = {
+                group_id: asdict(state)
+                for group_id, state
+                in self.states.items()
+            }
+
+            self.state_file.write_text(
+                json.dumps(
+                    data,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+        except Exception as e:
+
+            logger.warning(
+                f"[WhaleSocial] "
+                f"保存状态失败: {e}"
+            )
+
+    # =========================================================
+    # Energy
+    # =========================================================
+
+    def _update_energy(
+        self,
+        state: GroupState,
+        text: str,
+    ):
+
+        energy = state.social_energy
+
+        # 感兴趣的话题提高能量
+        keywords = self._keywords()
+
+        if any(
+            keyword.lower()
+            in text.lower()
+            for keyword in keywords
+        ):
+            energy += 0.03
+        else:
+            energy -= 0.005
+
+        state.social_energy = max(
+            0.1,
+            min(
+                energy,
+                self.config.get(
+                    "energy_max",
+                    1.0,
+                ),
+            ),
+        )
+
+    def _after_bot_message(
+        self,
+        state: GroupState,
+    ):
+
+        state.last_bot_message_time = time.time()
+
+        state.last_bot_ignored = False
+
+        state.consecutive_bot_messages += 1
+
+        state.social_energy = max(
+            0.1,
+            state.social_energy - 0.08,
+        )
+
+    # =========================================================
+    # Topic
+    # =========================================================
+
+    def _topic_still_relevant(
+        self,
+        state: GroupState,
+        decision: dict,
+    ) -> bool:
+
+        topic = (
+            decision.get(
+                "topic",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if not topic:
+            return True
+
+        recent_text = " ".join(
+            message["text"]
+            for message
+            in state.messages[-5:]
+        )
+
+        # 简单版本：
+        # 如果最近消息已经明显没有任何兴趣关键词，
+        # 认为话题可能已经切换。
+        keywords = self._keywords()
+
+        if any(
+            keyword.lower()
+            in recent_text.lower()
+            for keyword in keywords
+        ):
+            return True
+
+        return len(
+            state.messages
+        ) <= 2
+
+    # =========================================================
+    # Local Gate
+    # =========================================================
+
+    def _should_consider(
+        self,
+        state: GroupState,
+        text: str,
+    ) -> bool:
+
+        if self._in_cooldown(
+            state,
+        ):
+            return False
+
+        # 高频刷屏直接降低处理
+        if self._activity(state) > 30:
+            return False
+
+        # 刚刚自己连续说过
+        if (
+            state.consecutive_bot_messages
+            >= 1
+        ):
+            return False
+
+        return True
+
+    # =========================================================
+    # Utilities
+    # =========================================================
+
+    async def _get_provider_id(
+        self,
+    ) -> Optional[str]:
+
+        try:
+
+            providers = (
+                self.context.get_all_providers()
+            )
+
+            if not providers:
+                return None
+
+            return providers[0].meta().id
+
+        except Exception:
+
+            return None
+
+    def _get_group_id(
+        self,
+        event: AstrMessageEvent,
+    ) -> Optional[str]:
+
+        try:
+
+            group_id = event.get_group_id()
+
+            if group_id:
+                return str(group_id)
+
+        except Exception:
+            pass
+
+        return None
+
+    def _get_sender(
+        self,
+        event: AstrMessageEvent,
+    ) -> str:
+
+        try:
+
+            sender = event.get_sender_id()
+
+            if sender:
+                return str(sender)
+
+        except Exception:
+            pass
+
+        return "unknown"
+
+    def _is_bot_message(
+        self,
+        event: AstrMessageEvent,
+    ) -> bool:
+
+        try:
+
+            return bool(
+                event.is_bot_message()
+            )
+
+        except Exception:
+
+            return False
+
+    def _is_at_me(
+        self,
+        event: AstrMessageEvent,
+    ) -> bool:
+
+        try:
+
+            return bool(
+                event.is_at_or_wake_command
+            )
+
+        except Exception:
+
+            return False
+
+    def _parse_json(
+        self,
+        text: str,
+    ) -> Optional[dict]:
+
+        text = text.strip()
+
+        # ```json ... ```
+        text = re.sub(
+            r"^```json\s*",
+            "",
+            text,
+            flags=re.I,
+        )
+
+        text = re.sub(
+            r"^```\s*",
+            "",
+            text,
+        )
+
+        text = re.sub(
+            r"\s*```$",
+            "",
+            text,
+        )
+
+        try:
+
+            return json.loads(
+                text,
+            )
+
+        except Exception:
+
+            # 尝试寻找第一个 JSON object
+            match = re.search(
+                r"\{.*\}",
+                text,
+                flags=re.S,
+            )
+
+            if not match:
+                return None
+
+            try:
+
+                return json.loads(
+                    match.group(0)
+                )
+
+            except Exception:
+
+                return None
+
+    def _keywords(self) -> list[str]:
+
+        value = self.config.get(
+            "interest_keywords",
+            "",
+        )
+
+        return [
+            x.strip()
+            for x in value.splitlines()
+            if x.strip()
+        ]
+
+    def _context_limit(self) -> int:
+
+        return int(
+            self.config.get(
+                "context_message_limit",
+                20,
+            )
+        )
+
+    def _min_message_length(self) -> int:
+
+        return int(
+            self.config.get(
+                "min_message_length",
+                2,
+            )
+        )
+
+    def _base_probability(self) -> float:
+
+        return float(
+            self.config.get(
+                "base_speak_probability",
+                0.08,
+            )
+        )
+
+    def _high_interest_bonus(self) -> float:
+
+        return float(
+            self.config.get(
+                "high_interest_bonus",
+                1.8,
+            )
+        )
+```
+
+---
+
+# 4. 有一个地方我建议你马上改一下
+
+上面是**第一版可运行思路**，但如果你真的准备长期用，我不建议继续把状态全部塞进 `main.py`。
+
+更合理的是：
+
+```text
+astrbot_plugin_whale_social/
+│
+├── main.py
+│
+├── core/
+│   ├── social_engine.py
+│   ├── state.py
+│   ├── scorer.py
+│   └── decision.py
+│
+├── storage/
+│   └── state_store.py
+│
+├── metadata.yaml
+└── _conf_schema.json
+```
+
+因为下一步我们肯定还会加：
+
+```text
+群画像
+用户画像
+话题记忆
+被忽略次数
+主动话题
+社交关系
+每日活跃度
+不同群不同人格
+```
+
+继续堆 `main.py` 会很快失控。
+
+---
+
+# 5. 还有一个重要问题：第一版不要让 LLM 决定所有事情
+
+当前这个实现：
+
+```text
+每条消息
+ ↓
+本地评分
+ ↓
+概率命中
+ ↓
+LLM
+```
+
+已经比：
+
+```text
+每条消息 → LLM
+```
+
+好很多。
+
+但是我实际运行时会继续优化成：
+
+```text
+                    消息
+                     │
+                     ▼
+              本地 Signal Gate
+                     │
+          ┌──────────┴──────────┐
+          │                     │
+       不感兴趣              值得观察
+          │                     │
+        DROP                 Score
+                                │
+                     ┌──────────┼─────────┐
+                     │          │         │
+                    LOW       MEDIUM     HIGH
+                     │          │         │
+                   DROP       WAIT       LLM
+```
+
+这也是目前社区里一些主动回复类插件已经采用的方向：例如公开的 `astrbot_plugin_iris_memory` 就使用了 **SignalGate → LLM decision → 主动回复** 的分层设计，而不是每条消息直接让模型决定。citeturn3search2
+
+---
+
+# 6. 我还建议加一个 AstrBot 专用的“当前模型”
+
+我这里用了：
+
+```python
+provider_id = (
+    self.config.get("provider_id", "")
+    or await self._get_provider_id()
+)
+```
+
+其中：
+
+```python
+await self.context.get_current_chat_provider_id(
+    event.unified_msg_origin
+)
+```
+
+其实比简单取：
+
+```python
+self.context.get_all_providers()[0]
+```
+
+更合理。
+
+当前 SDK 已经提供 `get_current_chat_provider_id(umo)`，用于取得当前会话实际使用的 Provider。citeturn3search1
+
+所以正式版本我建议把：
+
+```python
+async def _get_provider_id(self):
+```
+
+换成：
+
+```python
+async def _get_provider_id(
+    self,
+    event: AstrMessageEvent,
+) -> Optional[str]:
+
+    try:
+        return await self.context.get_current_chat_provider_id(
+            event.unified_msg_origin
+        )
+    except Exception:
+        return None
+```
+
+然后：
+
+```python
+provider_id = (
+    self.config.get("provider_id", "")
+    or await self._get_provider_id(event)
+)
+```
+
+这样你的：
+
+> 鲸鱼娘正常聊天 → DeepSeek
+
+和：
+
+> 鲸鱼娘主动社交 → 同一个当前会话模型
+
+就能保持一致。
+
+---
+
+# 7. `send_message` 的 API
+
+主动发送部分使用：
+
+```python
+await self.context.send_message(
+    event.unified_msg_origin,
+    message_chain,
+)
+```
+
+这是当前 Context API 提供的主动发送能力，`unified_msg_origin` 可以从事件中获取。citeturn2search8
+
+所以这个插件并不需要自己去调用 QQ/OneBot API。
+
+这点很重要：
+
+```text
+鲸鱼娘插件
+    ↓
+AstrBot Context
+    ↓
+当前平台 Adapter
+    ↓
+QQ群 / Telegram / Discord ...
+```
+
+所以未来换平台也不用重写社交引擎。
+
+---
+
+# 8. 安装
+
+直接放：
+
+```text
+AstrBot/
+└── data/
+    └── plugins/
+        └── astrbot_plugin_whale_social/
+```
+
+然后：
+
+```text
+AstrBot WebUI
+    ↓
+插件
+    ↓
+重新加载
+```
+
+当前 WebUI 在插件加载失败时也提供 Reload，可以直接修改插件代码后重新加载，不需要每次重启整个 AstrBot。citeturn0search10
+
+也可以用 CLI：
+
+```powershell
+astrbot plug list
+```
+
+AstrBot 当前 CLI 支持插件的 `list / search / install / update / remove / new`。citeturn0search6
+
+---
+
+# 9. 第一版运行起来之后，你会得到这样的行为
+
+### 普通群聊
+
+```text
+A：今天吃什么
+B：不知道
+C：随便
+```
+
+鲸鱼娘：
+
+```text
+潜水
+```
+
+---
+
+### 游戏话题
+
+```text
+A：这个副本也太难了
+B：最后 Boss 我打了三次
+C：还是没过
+```
+
+鲸鱼娘：
+
+```text
+（观察）
+```
+
+然后：
+
+```text
+鲸鱼娘：那个 Boss 二阶段是真的有点阴……
+```
+
+---
+
+### 群聊刷屏
+
+```text
+A：哈哈哈哈
+B：笑死
+C：？？？
+D：不是吧
+E：卧槽
+F：哈哈哈哈
+```
+
+鲸鱼娘：
+
+```text
+潜水
+```
+
+---
+
+### @她
+
+```text
+A：@鲸鱼娘 你打过这个副本吗
+```
+
+直接：
+
+```text
+鲸鱼娘：打过啊，那个二阶段最好别贪输出……
+```
+
+---
+
+## 10. 不过，这个版本还有一个我认为非常值得改的地方
+
+现在：
+
+```text
+本地关键词
+    ↓
+决定是否值得调用 LLM
+```
+
+这个会导致一个问题：
+
+> **如果群友聊的是一个没有出现在关键词里的游戏，鲸鱼娘可能根本不会注意。**
+
+所以真正的 V2 我建议变成：
+
+```text
+本地规则
+    ↓
+低成本判断
+    ↓
+话题 embedding / LLM topic classifier
+    ↓
+TopicInterest
+    ↓
+SocialScore
+    ↓
+SPEAK / WAIT / IGNORE
+```
+
+而且**“社交决策模型”和“最终回复模型”应该分开**。
+
+最终理想结构其实是：
+
+```text
+                  群消息
+                    │
+                    ▼
+              Signal Gate
+                    │
+                    ▼
+              Topic Analyzer
+                    │
+                    ▼
+             Social Decision
+          ┌─────────┼─────────┐
+          ▼         ▼         ▼
+        IGNORE     WAIT      SPEAK
+                              │
+                              ▼
+                         Reply LLM
+                              │
+                              ▼
+                         延迟 2~8s
+                              │
+                              ▼
+                         再次检查话题
+                              │
+                              ▼
+                            发送
+```
+
+**这会比单纯给鲸鱼娘加一个“主动聊天 Prompt”强很多。**
+
+另外，当前 AstrBot 的插件配置会从 `_conf_schema.json` 自动生成并保存配置，因此你可以继续把“活跃度阈值、冷却、概率、兴趣、人格”等全部做成 WebUI 可调参数，而不需要改 Python。citeturn2search0
+
+如果你准备实际部署，我建议下一步直接把这个 MVP 升级成 **V1.1：`SocialEngine + GroupState + SignalGate + Decision LLM` 四层结构**，这样代码量不会大很多，但后面加入“鲸鱼娘记住某个群友/某个游戏/某个话题”会容易很多。

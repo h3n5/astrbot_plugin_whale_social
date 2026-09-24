@@ -1,0 +1,170 @@
+{
+  "enabled": {
+    "description": "全局开关",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后插件完全静默。"
+  },
+  "dry_run": {
+    "description": "演练模式",
+    "type": "bool",
+    "default": false,
+    "hint": "只记录决策与日志，不真正发送消息，也不改变冷却/记忆。"
+  },
+  "group_allowlist": {
+    "description": "生效群白名单",
+    "type": "list",
+    "default": [],
+    "hint": "默认关闭：留空表示不启用任何群。每项填写会话 UMO（可用 /sid 获取）。"
+  },
+  "min_message_length": {
+    "description": "最小消息长度",
+    "type": "int",
+    "default": 2,
+    "hint": "太短的消息不触发主动社交判断。"
+  },
+  "context_message_limit": {
+    "description": "上下文消息数量",
+    "type": "int",
+    "default": 20,
+    "hint": "保存并发送给判断模型的最近群聊消息条数。"
+  },
+  "incoming_rate_limit": {
+    "description": "刷屏阈值（30 秒）",
+    "type": "int",
+    "default": 30,
+    "hint": "30 秒内人类消息超过该值时不主动插话。"
+  },
+  "min_cooldown_seconds": {
+    "description": "最小主动发言冷却",
+    "type": "int",
+    "default": 900,
+    "hint": "主动发言后至少等待多少秒。"
+  },
+  "max_cooldown_seconds": {
+    "description": "最大主动发言冷却",
+    "type": "int",
+    "default": 1800,
+    "hint": "主动发言后的随机冷却上限。"
+  },
+  "reply_window_seconds": {
+    "description": "回应窗口",
+    "type": "int",
+    "default": 120,
+    "hint": "主动发言后，超过该时间无人回应则判定为“被忽略”。"
+  },
+  "base_speak_probability": {
+    "description": "基础主动发言概率",
+    "type": "float",
+    "default": 0.08,
+    "hint": "本地评分通过后，最终主动发送概率的基础值。",
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.01
+    }
+  },
+  "high_interest_bonus": {
+    "description": "高兴趣话题加成",
+    "type": "float",
+    "default": 1.8,
+    "hint": "命中兴趣关键词时的参与倍率上限。",
+    "slider": {
+      "min": 1,
+      "max": 3,
+      "step": 0.1
+    }
+  },
+  "energy_initial": {
+    "description": "初始社交能量",
+    "type": "float",
+    "default": 0.6,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  },
+  "energy_max": {
+    "description": "最大社交能量",
+    "type": "float",
+    "default": 1.0,
+    "slider": {
+      "min": 0.1,
+      "max": 2,
+      "step": 0.05
+    }
+  },
+  "daily_proactive_cap": {
+    "description": "每群每日主动上限",
+    "type": "int",
+    "default": 20,
+    "hint": "单个群每天最多主动发言次数；0 表示不限制。"
+  },
+  "active_hours": {
+    "description": "允许主动的时段",
+    "type": "string",
+    "default": "08:00-23:59",
+    "hint": "格式 HH:MM-HH:MM（本地时间），超出时段不主动。支持跨午夜，如 22:00-06:00。"
+  },
+  "provider_id": {
+    "description": "主动社交使用的模型",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用当前会话的模型。"
+  },
+  "interest_keywords": {
+    "description": "感兴趣关键词",
+    "type": "text",
+    "default": "游戏\n副本\nBoss\n活动\n抽卡\n角色\n装备\n攻略\n剧情\n动漫\n老婆\n整活\n哈哈\n笑死",
+    "hint": "每行一个关键词，命中提高参与意愿。"
+  },
+  "negative_keywords": {
+    "description": "负向关键词",
+    "type": "text",
+    "default": "",
+    "hint": "每行一个关键词，命中则直接放弃本次主动参与。"
+  },
+  "group_keyword_overrides": {
+    "description": "每群关键词覆盖",
+    "type": "object",
+    "default": {},
+    "hint": "形如 {\"umo\": \"关键词1\\n关键词2\"}，对指定群覆盖兴趣关键词。"
+  },
+  "output_blocklist": {
+    "description": "回复禁用词",
+    "type": "text",
+    "default": "",
+    "hint": "每行一个，回复中命中则丢弃该回复。"
+  },
+  "use_astrbot_memory": {
+    "description": "读取 AstrBot 会话记忆",
+    "type": "bool",
+    "default": true,
+    "hint": "把 AstrBot 会话历史作为额外上下文。"
+  },
+  "memory_writeback": {
+    "description": "主动消息写回会话记忆",
+    "type": "bool",
+    "default": true,
+    "hint": "主动发言后写回会话历史，保证后续正常回复上下文一致。"
+  },
+  "inject_group_context": {
+    "description": "注入群情给默认回复",
+    "type": "bool",
+    "default": true,
+    "hint": "在正常 LLM 请求时注入简短群情，避免污染 system prompt。"
+  },
+  "persona_prompt": {
+    "description": "鲸鱼娘社交人格",
+    "type": "text",
+    "default": "你是鲸鱼娘，一个游戏群里的虚拟群友。\n\n你喜欢游戏、动漫和群聊里的各种趣事。\n你平时比较喜欢潜水，不会为了说话而说话。\n看到自己感兴趣的话题时，会像普通群友一样自然参与。\n\n你的回复应该简短、自然、口语化。\n不要主动强调自己是 AI、机器人或程序。\n不要解释自己的行为逻辑。\n不要为了延续聊天而强行提问。\n不要连续刷屏。",
+    "hint": "控制鲸鱼娘的说话风格。"
+  },
+  "decision_prompt": {
+    "description": "社交决策 Prompt",
+    "type": "text",
+    "default": "",
+    "hint": "留空使用内置决策 Prompt。应与人格分离，只负责判断是否参与。"
+  }
+}
