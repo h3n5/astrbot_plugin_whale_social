@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from core.config import parse_active_hours
+from .config import parse_active_hours
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from core.config import PluginConfig
-    from core.flow import FlowController
-    from core.models import GroupState
+    from .config import PluginConfig
+    from .flow import FlowController
+    from .models import GroupState
 
 
 @dataclass

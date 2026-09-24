@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from core.config import PluginConfig
-    from core.models import GroupState
+    from .config import PluginConfig
+    from .models import GroupState
 
 # Tier multipliers are applied to the configured (min, max) cooldown range.
 TIER_MULTIPLIERS: dict[str, tuple[float, float]] = {

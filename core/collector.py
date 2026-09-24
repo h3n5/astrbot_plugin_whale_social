@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
-from core.cooldown import note_human_reply, open_reply_window, schedule_next_speak
-from core.models import ChatMessage
-from core.timeutil import local_datetime
+from .cooldown import note_human_reply, open_reply_window, schedule_next_speak
+from .models import ChatMessage
+from .timeutil import local_datetime
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from core.config import PluginConfig
-    from core.models import GroupState
+    from .config import PluginConfig
+    from .models import GroupState
 
 ENERGY_DRAIN = 0.08
 RATE_WINDOW_SECONDS = 300.0

@@ -1,8 +1,9 @@
 """Make the plugin root importable for the test-suite.
 
-The plugin itself is loaded by AstrBot with the plugin directory on
-``sys.path``; this conftest reproduces that so tests can import ``core`` and
-``storage`` without an AstrBot installation.
+Tests import ``core`` and ``storage`` as top-level packages; those modules use
+package-relative imports internally, so they work identically here and under
+AstrBot, which loads the plugin as ``data.plugins.<name>`` (the plugin
+directory itself is never put on ``sys.path``).
 """
 
 import os

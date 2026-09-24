@@ -12,11 +12,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
-from core.timeutil import day_key
+from .timeutil import day_key
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from core.config import PluginConfig
-    from core.models import GroupState
+    from .config import PluginConfig
+    from .models import GroupState
 
 
 @dataclass

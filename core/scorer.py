@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
-from core.gate import rate_in_window
-from core.topic import interest_multiplier
+from .gate import rate_in_window
+from .topic import interest_multiplier
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from core.config import PluginConfig
-    from core.models import GroupState
+    from .config import PluginConfig
+    from .models import GroupState
 
 
 @dataclass

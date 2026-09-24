@@ -82,3 +82,10 @@ def test_global_payload_absent_returns_empty(tmp_path):
     store = StateStore(tmp_path / "state.json")
     store.save({"a": {"social_energy": 1.0}})
     assert store.load_global() == {}
+
+
+def test_schema_version_stays_in_sync_with_models():
+    from core.models import SCHEMA_VERSION as MODELS_VERSION
+    from storage.state_store import SCHEMA_VERSION as STORE_VERSION
+
+    assert STORE_VERSION == MODELS_VERSION

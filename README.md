@@ -7,7 +7,7 @@
 本插件**只做主动层**：被 @ / 唤醒的消息一律交给 AstrBot 默认 agent，插件只观察、不回复、不拦截事件。主动发言只在**发送成功后**尝试写回 AstrBot 会话记忆，让后续正常回复也能看到它刚才说过的话。
 
 - 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
-- 当前版本：`0.2.2`
+- 当前版本：`0.2.3`
 - 设计文档（本地 `docs/`，不随仓库发布）：`docs/astrbot_plugin_whale_social_PLAN.md`、`docs/astrbot_plugin_whale_social_PLAN_v2.md`（V2 会话线程 / Debounce / 群级决策，已在 `0.2.1` 落地）
 
 ---

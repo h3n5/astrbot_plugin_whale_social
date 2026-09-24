@@ -17,19 +17,19 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 
-from core.collector import MessageCollector
-from core.config import PluginConfig
-from core.cooldown import in_cooldown, note_human_reply, settle_reply_window
-from core.debounce import DebounceTracker
-from core.decision import build_decision_prompt, build_system_prompt, parse_decision
-from core.dedup import MessageDeduplicator
-from core.flow import FlowController
-from core.gate import check_gate
-from core.memory import build_group_hint
-from core.models import GroupState, MessageEnvelope
-from core.reply import sanitize_reply
-from core.scorer import compute_score
-from core.threads import (
+from .collector import MessageCollector
+from .config import PluginConfig
+from .cooldown import in_cooldown, note_human_reply, settle_reply_window
+from .debounce import DebounceTracker
+from .decision import build_decision_prompt, build_system_prompt, parse_decision
+from .dedup import MessageDeduplicator
+from .flow import FlowController
+from .gate import check_gate
+from .memory import build_group_hint
+from .models import GroupState, MessageEnvelope
+from .reply import sanitize_reply
+from .scorer import compute_score
+from .threads import (
     ConversationThread,
     assign_thread,
     attach_bot_message,
@@ -42,8 +42,8 @@ from core.threads import (
     select_thread,
     thread_is_active,
 )
-from core.timeutil import day_key, local_datetime
-from core.topic import keyword_hits
+from .timeutil import day_key, local_datetime
+from .topic import keyword_hits
 
 LlmDecide = Callable[[str, str, str], Awaitable[Optional[str]]]
 SendMessage = Callable[[str, str, Optional[str]], Awaitable[bool]]

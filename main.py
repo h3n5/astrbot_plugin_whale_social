@@ -16,12 +16,12 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
-from core.config import PluginConfig
-from core.content import normalize_content
-from core.engine import SocialEngine
-from core.memory import build_group_hint, build_writeback_user_text
-from core.timeutil import local_datetime
-from storage.state_store import StateStore
+from .core.config import PluginConfig
+from .core.content import normalize_content
+from .core.engine import SocialEngine
+from .core.memory import build_group_hint, build_writeback_user_text
+from .core.timeutil import local_datetime
+from .storage.state_store import StateStore
 
 PLUGIN_NAME = "astrbot_plugin_whale_social"
 # Hard cap on one proactive send; a hung platform adapter must not keep the

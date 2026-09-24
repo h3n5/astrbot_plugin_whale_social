@@ -13,11 +13,11 @@ import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
-from core.topic import keyword_hits
+from .topic import keyword_hits
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from core.config import PluginConfig
-    from core.models import GroupState
+    from .config import PluginConfig
+    from .models import GroupState
 
 TARGET_GROUP = "GROUP"
 TARGET_USER = "USER"

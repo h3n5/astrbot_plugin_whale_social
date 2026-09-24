@@ -7,10 +7,10 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
-from core.config import DEFAULT_DECISION_PROMPT
+from .config import DEFAULT_DECISION_PROMPT
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from core.config import PluginConfig
+    from .config import PluginConfig
 
 ALLOWED_ACTIONS: tuple[str, ...] = ("IGNORE", "WAIT", "SPEAK")
 

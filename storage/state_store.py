@@ -8,7 +8,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from core.models import SCHEMA_VERSION
+# Keep in sync with core.models.SCHEMA_VERSION. A cross-package import here
+# would break top-level package imports (the test suite imports ``storage``
+# directly), so the constant is duplicated and guarded by a sync test.
+SCHEMA_VERSION = 2
 
 
 class StateStore:
