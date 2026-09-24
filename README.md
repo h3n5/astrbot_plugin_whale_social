@@ -7,7 +7,7 @@
 本插件**只做主动层**：被 @ / 唤醒的消息一律交给 AstrBot 默认 agent，插件只观察、不回复、不拦截事件。主动发言只在**发送成功后**尝试写回 AstrBot 会话记忆，让后续正常回复也能看到它刚才说过的话。
 
 - 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
-- 当前版本：`0.2.3`
+- 当前版本：`0.2.4`
 - 设计文档（本地 `docs/`，不随仓库发布）：`docs/astrbot_plugin_whale_social_PLAN.md`、`docs/astrbot_plugin_whale_social_PLAN_v2.md`（V2 会话线程 / Debounce / 群级决策，已在 `0.2.1` 落地）
 
 ---
@@ -127,7 +127,7 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 | `provider_id` | string | `""` | 留空使用当前会话模型 |
 | `interest_keywords` | text | 游戏/副本/… | 每行一个兴趣关键词 |
 | `negative_keywords` | text | `""` | 每行一个，命中则直接放弃本次参与 |
-| `group_keyword_overrides` | object | `{}` | 形如 `{"<umo>": "关键词1\n关键词2"}` |
+| `group_keyword_overrides` | list | `[]` | 每项 `UMO=关键词1,关键词2`，覆盖该群的兴趣关键词 |
 | `output_blocklist` | text | `""` | 每行一个，回复命中则丢弃 |
 | `max_reply_length` | int | `200` | 主动回复的最大字符数，超出截断；`0` = 不限制 |
 | `use_astrbot_memory` | bool | `true` | 预留：读取 AstrBot 会话历史作为上下文（见「已知限制」） |

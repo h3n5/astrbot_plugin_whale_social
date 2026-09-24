@@ -297,9 +297,9 @@
   },
   "group_keyword_overrides": {
     "description": "每群关键词覆盖",
-    "type": "object",
-    "default": {},
-    "hint": "形如 {\"umo\": \"关键词1\\n关键词2\"}，对指定群覆盖兴趣关键词。"
+    "type": "list",
+    "default": [],
+    "hint": "每一项格式：UMO=关键词1,关键词2（UMO 可用 /sid 获取，逗号分隔关键词）。留空使用全局关键词。"
   },
   "output_blocklist": {
     "description": "回复禁用词",

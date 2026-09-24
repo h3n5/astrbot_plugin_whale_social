@@ -109,13 +109,36 @@ def _as_allowlist(value: Any) -> list[str]:
 
 
 def _as_keyword_overrides(value: Any) -> dict[str, list[str]]:
-    if not isinstance(value, Mapping):
-        return {}
-    result: dict[str, list[str]] = {}
-    for umo, keywords in value.items():
-        parsed = split_lines(keywords)
-        if parsed:
-            result[str(umo)] = parsed
+    """Accept per-group keyword overrides in either supported shape.
+
+    The WebUI schema exposes this option as a list of ``umo=kw1,kw2`` items
+    (AstrBot requires an ``items`` sub-schema for object-type nodes, which a
+    dynamic umo -> keywords map cannot provide). Hand-edited configs may
+    still provide the raw mapping form.
+    """
+    if isinstance(value, Mapping):
+        result: dict[str, list[str]] = {}
+        for umo, keywords in value.items():
+            parsed = split_lines(keywords)
+            if parsed:
+                result[str(umo)] = parsed
+        return result
+
+    if isinstance(value, (list, tuple, set)):
+        items = [str(item) for item in value]
+    else:
+        items = split_lines(value)
+
+    result = {}
+    for item in items:
+        entry = item.strip()
+        if not entry or "=" not in entry:
+            continue
+        umo, _, raw = entry.partition("=")
+        umo = umo.strip()
+        keywords = [kw.strip() for kw in raw.replace("，", ",").split(",") if kw.strip()]
+        if umo and keywords:
+            result[umo] = keywords
     return result
 
 

@@ -31,3 +31,27 @@ def test_blocklist_and_reply_length_roundtrip():
     )
     assert config.blocklist() == ["广告", "代练"]
     assert config.max_reply_length == 50
+
+
+def test_keyword_overrides_accept_list_items():
+    config = PluginConfig.from_mapping(
+        {"group_keyword_overrides": ["aiocqhttp:GroupMessage:123=游戏,副本", " umo2 = 抽卡，肝 "]}
+    )
+    assert config.group_keyword_overrides == {
+        "aiocqhttp:GroupMessage:123": ["游戏", "副本"],
+        "umo2": ["抽卡", "肝"],
+    }
+
+
+def test_keyword_overrides_still_accept_mapping_form():
+    config = PluginConfig.from_mapping(
+        {"group_keyword_overrides": {"umo1": "游戏\n副本"}}
+    )
+    assert config.group_keyword_overrides == {"umo1": ["游戏", "副本"]}
+
+
+def test_keyword_overrides_skip_malformed_items():
+    config = PluginConfig.from_mapping(
+        {"group_keyword_overrides": ["没有分隔符", "", "=空群号", "umo=ok"]}
+    )
+    assert config.group_keyword_overrides == {"umo": ["ok"]}
