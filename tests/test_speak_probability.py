@@ -104,7 +104,7 @@ def _make_sim_engine(config: PluginConfig, clock: list[float], sent: list, evals
         clock=lambda: clock[0],
         sleep=no_sleep,
         rng=random.Random(20260925),
-        log=logs.append,
+        trace=logs.append,
     )
 
 
@@ -135,7 +135,7 @@ async def _run_hour(texts: list[str]) -> dict:
             last_bot_id = str(messages[-1].get("message_id", ""))
 
     state = engine.get_state(UMO)
-    rounds = sum(1 for line in logs if "score=" in line)
+    rounds = sum(1 for line in logs if "掷骰" in line)
     return {
         "rounds": rounds,
         "evaluations": len(evals),

@@ -174,6 +174,7 @@ def parse_active_hours(value: str) -> tuple[int, int]:
 class PluginConfig:
     enabled: bool = True
     dry_run: bool = False
+    verbose_log: bool = False
     group_allowlist: list[str] = field(default_factory=list)
     min_message_length: int = 2
     context_message_limit: int = 20
@@ -230,6 +231,7 @@ class PluginConfig:
         return cls(
             enabled=_as_bool(_get(mapping, "enabled", True), True),
             dry_run=_as_bool(_get(mapping, "dry_run", False), False),
+            verbose_log=_as_bool(_get(mapping, "verbose_log", False), False),
             group_allowlist=_as_allowlist(_get(mapping, "group_allowlist", [])),
             min_message_length=_as_int(_get(mapping, "min_message_length", 2), 2),
             context_message_limit=_as_int(_get(mapping, "context_message_limit", 20), 20),

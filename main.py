@@ -45,7 +45,7 @@ class WhaleSocialPlugin(Star):
             llm_reply=self._llm_reply,
             writeback=self._memory_writeback,
             on_change=self._schedule_save,
-            log=self._engine_log,
+            trace=self._trace if self.cfg.verbose_log else None,
         )
         self._save_task: Optional[asyncio.Task[None]] = None
         self._dirty = False
@@ -62,6 +62,19 @@ class WhaleSocialPlugin(Star):
             f"[{PLUGIN_NAME}] started; enabled groups: "
             f"{self.cfg.group_allowlist or '（空，默认全部关闭）'}"
         )
+        if self.cfg.verbose_log:
+            start, end = self.cfg.active_window()
+            window = "不限" if (start, end) == (0, 1440) else self.cfg.active_hours
+            logger.info(
+                f"[{PLUGIN_NAME}] 生效参数：基础概率 {self.cfg.base_speak_probability:.2f}"
+                f"｜冷却 {self.cfg.min_cooldown_seconds:.0f}-{self.cfg.max_cooldown_seconds:.0f}s"
+                f"｜防抖 {self.cfg.debounce_seconds:.1f}s（最长 {self.cfg.debounce_max_wait_seconds:.1f}s）"
+                f"｜会话窗口 {self.cfg.thread_window_seconds:.0f}s"
+                f"｜时段 {window}"
+                f"｜时区 {self.cfg.timezone or '本机'}"
+                f"｜演练 {'开' if self.cfg.dry_run else '关'}"
+                f"｜启用群 {len(self.cfg.group_allowlist)} 个"
+            )
 
     async def terminate(self) -> None:
         try:
@@ -103,8 +116,8 @@ class WhaleSocialPlugin(Star):
 
     # -- AstrBot adapters ------------------------------------------------
 
-    def _engine_log(self, message: str) -> None:
-        logger.info(f"[{PLUGIN_NAME}] {message}")
+    def _trace(self, message: str) -> None:
+        logger.info(f"[{PLUGIN_NAME}][决策] {message}")
 
     async def _resolve_provider_id(self, umo: str) -> Optional[str]:
         if self.cfg.provider_id:

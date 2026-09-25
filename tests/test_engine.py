@@ -52,7 +52,7 @@ def make_engine(
     writeback=None,
     send_result=True,
     llm_calls=None,
-    log=None,
+    trace=None,
     llm_reply=None,
 ):
     async def llm_decide(umo, system_prompt, prompt):
@@ -81,7 +81,7 @@ def make_engine(
         sleep=sleep or _no_sleep,
         rng=rng or FakeRng(),
         clock=clock or (lambda: 1000.0),
-        log=log,
+        trace=trace,
     )
 
 
@@ -974,7 +974,7 @@ def test_decision_funnel_logs_score_and_result():
         engine = make_engine(
             make_config(),
             json.dumps({"action": "SPEAK", "topic": "闲聊", "reply": "聊得热闹"}),
-            log=logs.append,
+            trace=logs.append,
         )
         await engine.handle_message(
             UMO, message_id="1", sender="u1", text="随便聊聊最近怎么样", is_bot=False
@@ -983,8 +983,8 @@ def test_decision_funnel_logs_score_and_result():
         return logs
 
     logs = asyncio.run(scenario())
-    assert any("score=" in line and "prob=" in line and "roll=" in line for line in logs)
-    assert any("-> speak" in line for line in logs)
+    assert any("掷骰" in line and "概率" in line and "点数" in line for line in logs)
+    assert any("发言成功" in line for line in logs)
 
 
 def test_daily_reset_refills_social_energy():
@@ -1088,3 +1088,89 @@ def test_addressed_reply_to_bot_message_boosts_factors():
     llm_calls = asyncio.run(scenario())
     assert llm_calls
     assert '"addressed_to_me": 2.0' in llm_calls[-1]
+
+
+def test_gate_reasons_translate_to_chinese():
+    from core.engine import describe_gate_reason
+
+    state = engine = None  # noqa: F841
+    cfg = make_config()
+    state = engine_state = None  # noqa: F841
+    from core.models import GroupState
+
+    state = GroupState(next_speak_after=2000.0, send_blocked_until=3000.0, proactive_sent_today=7)
+    now = 1000.0
+    assert "冷却中（还剩 1000s）" in describe_gate_reason(state, cfg, now, "cooldown")
+    assert "发送失败退避（还剩 2000s）" in describe_gate_reason(state, cfg, now, "failure_backoff")
+    assert "刷屏保护" in describe_gate_reason(state, cfg, now, "rate_limit")
+    assert "刚发过言" in describe_gate_reason(state, cfg, now, "consecutive_bot")
+    assert "本群发言令牌不足" in describe_gate_reason(state, cfg, now, "group_bucket")
+    assert "全局发言令牌不足" in describe_gate_reason(state, cfg, now, "global_bucket")
+    assert "全局今日额度" in describe_gate_reason(state, cfg, now, "global_daily_cap")
+    assert "本群今日额度已用完（7/" in describe_gate_reason(state, cfg, now, "daily_cap")
+    assert "静默时段" in describe_gate_reason(state, cfg, now, "quiet_hours")
+    assert "全局关闭" in describe_gate_reason(state, cfg, now, "disabled")
+
+
+def test_block_traces_dedupe_by_reason():
+    async def scenario():
+        traces = []
+        engine = make_engine(make_config(), json.dumps({"action": "IGNORE"}), trace=traces.append)
+        state = engine.get_state(UMO)
+        state.next_speak_after = 5000.0  # cooldown blocks everything (clock=1000)
+        for index in range(3):
+            await engine.handle_message(
+                UMO, message_id=f"m{index}", sender="u1", text="普通闲聊消息", is_bot=False
+            )
+        assert len(traces) == 1 and "冷却中" in traces[0]
+        # Reason changes -> the new reason emits again.
+        state.next_speak_after = 0.0
+        state.send_blocked_until = 6000.0
+        await engine.handle_message(
+            UMO, message_id="m3", sender="u1", text="普通闲聊消息", is_bot=False
+        )
+        assert len(traces) == 2 and "退避" in traces[1]
+        return traces
+
+    asyncio.run(scenario())
+
+
+def test_speak_trace_includes_quota_and_cooldown():
+    async def scenario():
+        traces, sent = [], []
+        decision = json.dumps({"action": "SPEAK", "topic": "副本", "reply": "带我一个"})
+        engine = make_engine(
+            make_config(),
+            decision,
+            sent=sent,
+            rng=FakeRng(uniform_value=10.0),
+            trace=traces.append,
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return traces
+
+    traces = asyncio.run(scenario())
+    assert any("发言成功「带我一个」" in line and "今日额度 1/20" in line and "冷却 10s" in line for line in traces)
+
+
+def test_roll_trace_breaks_down_factors():
+    async def scenario():
+        traces = []
+        engine = make_engine(
+            make_config(base_speak_probability=0.0),
+            json.dumps({"action": "IGNORE"}),
+            trace=traces.append,
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return traces
+
+    traces = asyncio.run(scenario())
+    roll_lines = [line for line in traces if "掷骰" in line]
+    assert roll_lines and "静默掷骰未过" in roll_lines[0]
+    assert "相关性" in roll_lines[0] and "被回复" in roll_lines[0] and "会话 t1" in roll_lines[0]

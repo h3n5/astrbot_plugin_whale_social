@@ -11,6 +11,12 @@
     "default": false,
     "hint": "只记录决策与日志，不真正发送消息，也不改变冷却/记忆。"
   },
+  "verbose_log": {
+    "description": "详细决策日志",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后每次决策在日志输出一行 [决策] 追踪（门拦截原因、概率掷骰、得分拆解、模型判断、取消与成功发言）；拦截日志按原因去重，不会刷屏。关闭时零开销。"
+  },
   "group_allowlist": {
     "description": "生效群白名单",
     "type": "list",

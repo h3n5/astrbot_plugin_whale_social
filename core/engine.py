@@ -71,6 +71,35 @@ SCORING_TAIL = 5
 LOCAL_ECHO_WINDOW = 30.0
 
 
+def describe_gate_reason(
+    state: GroupState, config: PluginConfig, now: float, reason: str
+) -> str:
+    """Human-readable Chinese description of a gate rejection reason."""
+    if reason == "cooldown":
+        remaining = max(0, int(state.next_speak_after - now))
+        return f"冷却中（还剩 {remaining}s）"
+    if reason == "failure_backoff":
+        remaining = max(0, int(state.send_blocked_until - now))
+        return f"发送失败退避（还剩 {remaining}s）"
+    if reason == "rate_limit":
+        return "刷屏保护（30 秒内消息过密）"
+    if reason == "consecutive_bot":
+        return "刚发过言，等待回应"
+    if reason == "group_bucket":
+        return "本群发言令牌不足"
+    if reason == "global_bucket":
+        return "全局发言令牌不足"
+    if reason == "global_daily_cap":
+        return "全局今日额度已用完"
+    if reason == "daily_cap":
+        return f"本群今日额度已用完（{state.proactive_sent_today}/{config.daily_proactive_cap}）"
+    if reason == "quiet_hours":
+        return "静默时段"
+    if reason == "disabled":
+        return "插件全局关闭"
+    return reason
+
+
 class SocialEngine:
     def __init__(
         self,
@@ -84,7 +113,7 @@ class SocialEngine:
         clock: Clock = time.time,
         sleep: Sleeper = asyncio.sleep,
         rng: Optional[random.Random] = None,
-        log: Optional[Log] = None,
+        trace: Optional[Log] = None,
     ) -> None:
         self.config = config
         self.llm_decide = llm_decide
@@ -95,7 +124,13 @@ class SocialEngine:
         self.clock = clock
         self.sleep = sleep
         self.rng = rng or random.Random()
-        self.log = log or (lambda _message: None)
+        # Observability-only decision trace sink. None means fully off: call
+        # sites guard on ``is not None`` so nothing is formatted, and a raising
+        # sink must never affect decisions (see _safe_trace).
+        self.trace = trace
+        # Last emitted blocking-trace reason per group: repeated blocks with
+        # the same reason stay silent until the reason changes.
+        self._last_block_trace: dict[str, str] = {}
 
         self.states: dict[str, GroupState] = {}
         self.collector = MessageCollector(config)
@@ -146,6 +181,7 @@ class SocialEngine:
         if umo in self.states:
             del self.states[umo]
         self.last_decision.pop(umo, None)
+        self._last_block_trace.pop(umo, None)
         self._notify()
 
     def export_persist(self) -> dict[str, dict[str, Any]]:
@@ -195,6 +231,7 @@ class SocialEngine:
         if removed:
             for umo in removed:
                 self.last_decision.pop(umo, None)
+                self._last_block_trace.pop(umo, None)
             self._notify()
         return removed
 
@@ -225,10 +262,34 @@ class SocialEngine:
                 self.config.energy_initial, self.config.energy_max
             )
 
-    def _record_decision(self, umo: str, outcome: str) -> None:
-        """Set the observability outcome for this group and log it."""
+    def _record_decision(self, umo: str, outcome: str, trace_msg: str = "") -> None:
+        """Set the observability outcome for this group and trace it."""
         self.last_decision[umo] = outcome
-        self.log(f"[decision] {umo} -> {outcome}")
+        if trace_msg:
+            self._safe_trace(trace_msg)
+        self._last_block_trace.pop(umo, None)
+
+    def _safe_trace(self, message: str) -> None:
+        """Emit a trace line; a raising sink must never affect decisions."""
+        if self.trace is None:
+            return
+        try:
+            self.trace(message)
+        except Exception:  # pragma: no cover - sink must not break the engine
+            pass
+
+    def _trace_block(self, umo: str, reason_key: str, message: str) -> None:
+        """Trace a blocking state, deduplicated by reason per group.
+
+        100 messages arriving during one cooldown produce a single line; a
+        different reason (or any non-blocking event) emits again.
+        """
+        if self.trace is None:
+            return
+        if self._last_block_trace.get(umo) == reason_key:
+            return
+        self._last_block_trace[umo] = reason_key
+        self._safe_trace(message)
 
     @staticmethod
     def _clamp_energy(value: float, ceiling: float) -> float:
@@ -316,6 +377,12 @@ class SocialEngine:
             state.social_energy = self._clamp_energy(
                 state.social_energy + ENERGY_MENTION_BONUS, self.config.energy_max
             )
+            if self.trace is not None:
+                self._trace_block(
+                    umo,
+                    "mentioned",
+                    f"被 @ 观察：交给默认代理回复，{int(MENTION_HOLD_SECONDS)}s 内压制主动发言",
+                )
             self._notify()
             return
 
@@ -334,9 +401,16 @@ class SocialEngine:
             flow=self.flow,
         )
         if not gate.allowed:
+            if self.trace is not None:
+                self._trace_block(
+                    umo,
+                    f"gate:{gate.reason}",
+                    f"被拦下：{describe_gate_reason(state, self.config, now, gate.reason)}",
+                )
             self._notify()
             return
 
+        self._last_block_trace.pop(umo, None)
         self._arm_debounce(umo, now)
         self._notify()
 
@@ -503,7 +577,10 @@ class SocialEngine:
 
         if now < state.mentioned_until:
             state.mentioned_until = 0.0
-            self.log(f"[decision] {umo} held back: bot was recently mentioned")
+            if self.trace is not None:
+                self._trace_block(
+                    umo, "gate:mentioned", "静默后 被拦下：刚被 @（压制中）"
+                )
             self._notify()
             return
 
@@ -515,14 +592,20 @@ class SocialEngine:
             flow=self.flow,
         )
         if not gate.allowed:
-            self.log(f"[decision] {umo} gate={gate.reason}")
+            if self.trace is not None:
+                self._trace_block(
+                    umo,
+                    f"gate:{gate.reason}",
+                    f"静默后 被拦下：{describe_gate_reason(state, self.config, now, gate.reason)}",
+                )
             self._notify()
             return
 
         refresh_activities(state, self.config, now)
         thread = select_thread(state, self.config, now, umo=umo)
         if thread is None:
-            self.log(f"[decision] {umo} no eligible thread")
+            if self.trace is not None:
+                self._trace_block(umo, "no_thread", "静默后 无值得参与的会话")
             self._notify()
             return
 
@@ -542,9 +625,12 @@ class SocialEngine:
             trigger_text=trigger_text,
         )
         if factors.total <= 0:
-            self.log(
-                f"[decision] {umo} score<=0 (negative keyword: {factors.negative_hit})"
-            )
+            if self.trace is not None:
+                self._trace_block(
+                    umo,
+                    "negative",
+                    f"命中负向关键词「{factors.negative_hit}」，放弃参与",
+                )
             self._notify()
             return
 
@@ -553,12 +639,25 @@ class SocialEngine:
             MAX_PROBABILITY,
         )
         roll = self.rng.random()
-        self.log(
-            f"[decision] {umo} thread={thread.id} factors={format_factors(factors)} "
-            f"score={factors.total:.2f} prob={probability:.1%} roll={roll:.2f} -> "
-            + ("evaluate" if roll <= probability else "skip")
-        )
-        if roll > probability:
+        if self.trace is not None:
+            breakdown = (
+                f"相关性 {factors.conversation_relevance:.2f}"
+                f" × 活跃 {factors.conversation_activity:.2f}"
+                f" × 时机 {factors.social_opportunity:.2f}"
+                f" × 频率 {factors.recent_reply_frequency:.2f}"
+                f" × 能量 {factors.social_energy:.2f}"
+                f" × 被回复 {factors.addressed_to_me:.2f}"
+            )
+            # Strictly less: a zero probability must never roll a pass.
+            passed = roll < probability
+            self._safe_trace(
+                f"静默掷骰{'通过' if passed else '未过'}：概率 {probability:.1%} "
+                f"{'≥' if passed else '<'} 点数 {roll:.1%}"
+                f"｜得分 {factors.total:.2f}（{breakdown}）"
+                f"｜会话 {thread.id}｜触发「{trigger_text}」"
+            )
+            self._last_block_trace.pop(umo, None)
+        if roll >= probability:
             self._notify()
             return
 
@@ -593,7 +692,7 @@ class SocialEngine:
 
         thread = find_thread(state, thread_id)
         if thread is None or not thread_is_active(thread, self.config, now):
-            self._record_decision(umo, "thread_ended")
+            self._record_decision(umo, "thread_ended", f"静默后会话已结束：{thread_id}")
             return
 
         # Recompute the factors at evaluate time so the decision model sees
@@ -630,31 +729,50 @@ class SocialEngine:
             # answered but declined, and back off so a hot group cannot hammer
             # a broken provider.
             self._note_llm_failure(state, now)
-            self._record_decision(umo, "llm_failed")
+            self._record_decision(
+                umo,
+                "llm_failed",
+                f"决策模型调用失败：退避 {max(0, int(state.next_speak_after - now))}s",
+            )
             return
         decision = parse_decision(raw or "")
         if decision is None:
             # The model responded but not with valid JSON; back off as well.
             self._note_llm_failure(state, now)
-            self._record_decision(umo, "parse_failed")
+            self._record_decision(
+                umo,
+                "parse_failed",
+                f"决策模型输出无法解析为 JSON：退避 {max(0, int(state.next_speak_after - now))}s",
+            )
             return
 
         chosen = thread
         if decision.thread_id:
             candidate = find_thread(state, decision.thread_id)
             if candidate is None or not thread_is_active(candidate, self.config, self.clock()):
-                self._record_decision(umo, "bad_thread")
+                self._record_decision(
+                    umo, "bad_thread", f"模型选择了无效会话 {decision.thread_id}"
+                )
                 return
             chosen = candidate
 
-        self._record_decision(umo, decision.action)
-
+        topic_label = decision.topic or chosen.topic or state.shown_topic or "未识别"
         if decision.action == "IGNORE":
             # P0 fix: IGNORE is a local choice, not "the bot was ignored".
+            self._record_decision(
+                umo,
+                "IGNORE",
+                f"模型判断 IGNORE（{decision.reason or '未说明'}）｜会话 {chosen.id}｜话题 {topic_label}",
+            )
             return
         if decision.action == "WAIT":
             state.selected_thread_id = chosen.id
             state.shown_topic = decision.topic or chosen.topic or state.shown_topic
+            self._record_decision(
+                umo,
+                "WAIT",
+                f"模型判断 WAIT（{decision.reason or '未说明'}）｜会话 {chosen.id}｜话题 {topic_label}",
+            )
             return
 
         reply: Optional[str] = decision.reply
@@ -668,7 +786,11 @@ class SocialEngine:
             if reply is None:
                 now = self.clock()
                 self._note_llm_failure(state, now)
-                self._record_decision(umo, "reply_failed")
+                self._record_decision(
+                    umo,
+                    "reply_failed",
+                    f"回复生成调用失败：退避 {max(0, int(state.next_speak_after - now))}s",
+                )
                 return
 
         reply = sanitize_reply(
@@ -677,7 +799,9 @@ class SocialEngine:
             max_length=self.config.max_reply_length,
         )
         if not reply:
-            self._record_decision(umo, "empty_reply")
+            self._record_decision(
+                umo, "empty_reply", "回复内容被过滤为空（禁用词/空白），放弃发送"
+            )
             return
 
         state.selected_thread_id = chosen.id
@@ -688,28 +812,38 @@ class SocialEngine:
 
         now = self.clock()
         if in_cooldown(state, now):
-            self._record_decision(umo, "cooldown_cancel")
+            self._record_decision(
+                umo,
+                "cooldown_cancel",
+                f"延迟后 被拦下：冷却中（还剩 {max(0, int(state.next_speak_after - now))}s），取消发送",
+            )
             return
         if now < state.mentioned_until:
             state.mentioned_until = 0.0
-            self._record_decision(umo, "mentioned_cancel")
+            self._record_decision(umo, "mentioned_cancel", "延迟期间被 @，取消发送")
             return
         if not thread_is_active(chosen, self.config, now):
-            self._record_decision(umo, "thread_ended")
+            self._record_decision(umo, "thread_ended", "延迟后会话已结束，取消发送")
             return
         if self._topic_moved_away(state, chosen, expected_revision, chosen_len, umo, now):
             # New messages arrived during the delay and the group moved on:
             # never send a reply computed for a stale topic.
-            self._record_decision(umo, "topic_changed")
+            self._record_decision(
+                umo, "topic_changed", "延迟后话题已被新消息切走，取消发送"
+            )
             return
 
         allowed, reason = self.flow.check(state, now)
         if not allowed:
-            self._record_decision(umo, reason)
+            self._record_decision(
+                umo,
+                reason,
+                f"延迟后 被拦下：{describe_gate_reason(state, self.config, now, reason)}，取消发送",
+            )
             return
 
         if self.config.dry_run:
-            self._record_decision(umo, "dry_run")
+            self._record_decision(umo, "dry_run", f"演练模式：跳过发送「{reply}」")
             return
 
         self.flow.reserve(state, now)
@@ -723,7 +857,11 @@ class SocialEngine:
             state.local_outgoing_at = 0.0
             state.local_outgoing_text = ""
             self.flow.rollback(state, now)
-            self._record_decision(umo, "send_failed")
+            self._record_decision(
+                umo,
+                "send_failed",
+                f"发送失败：退避 {max(0, int(state.send_blocked_until - now))}s",
+            )
             self._notify()
             return
         self.flow.commit_success(state, now)
@@ -742,7 +880,12 @@ class SocialEngine:
         # Local record keeps the bot's participation visible even when the
         # platform does not echo our own outbound event back.
         attach_bot_message(chosen, payload, self.config, sent_at)
-        self._record_decision(umo, "speak")
+        self._record_decision(
+            umo,
+            "speak",
+            f"发言成功「{reply}」｜今日额度 {state.proactive_sent_today}/{self.config.daily_proactive_cap}"
+            f"｜冷却 {max(0, int(state.next_speak_after - sent_at))}s",
+        )
 
         if self.config.memory_writeback and self.writeback is not None:
             try:
