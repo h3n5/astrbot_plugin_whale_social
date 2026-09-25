@@ -51,10 +51,10 @@ Writeback = Callable[[str, str, str], Awaitable[None]]
 OnChange = Callable[[], None]
 Clock = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
+Log = Callable[[str], None]
 
 ENERGY_MENTION_BONUS = 0.10
 ENERGY_KEYWORD_BONUS = 0.03
-ENERGY_CHAT_PENALTY = 0.005
 ENERGY_FLOOR = 0.1
 MENTION_HOLD_SECONDS = 60.0
 REPLY_MIN_DELAY = 2.0
@@ -76,6 +76,7 @@ class SocialEngine:
         clock: Clock = time.time,
         sleep: Sleeper = asyncio.sleep,
         rng: Optional[random.Random] = None,
+        log: Optional[Log] = None,
     ) -> None:
         self.config = config
         self.llm_decide = llm_decide
@@ -85,6 +86,7 @@ class SocialEngine:
         self.clock = clock
         self.sleep = sleep
         self.rng = rng or random.Random()
+        self.log = log or (lambda _message: None)
 
         self.states: dict[str, GroupState] = {}
         self.collector = MessageCollector(config)
@@ -208,6 +210,16 @@ class SocialEngine:
         if state.daily_reset_date != today:
             state.daily_reset_date = today
             state.proactive_sent_today = 0
+            # A new day refills the social battery: yesterday's sends must not
+            # keep today's probability pinned near the energy floor.
+            state.social_energy = self._clamp_energy(
+                self.config.energy_initial, self.config.energy_max
+            )
+
+    def _record_decision(self, umo: str, outcome: str) -> None:
+        """Set the observability outcome for this group and log it."""
+        self.last_decision[umo] = outcome
+        self.log(f"[decision] {umo} -> {outcome}")
 
     @staticmethod
     def _clamp_energy(value: float, ceiling: float) -> float:
@@ -404,11 +416,15 @@ class SocialEngine:
         return _callback
 
     def _update_energy(self, state: GroupState, text: str, umo: str) -> None:
-        hits = keyword_hits(text, self.config.interest_keyword_list(umo))
-        delta = ENERGY_KEYWORD_BONUS if hits else -ENERGY_CHAT_PENALTY
-        state.social_energy = self._clamp_energy(
-            state.social_energy + delta, self.config.energy_max
-        )
+        # Energy is a send battery: interest-topic chatter tops it up, only
+        # actually speaking drains it (collector.note_outgoing), and a new day
+        # refills it (_ensure_daily_reset). Ordinary chat must not ratchet it
+        # toward the floor — that pinned the whole probability funnel near 0.5%
+        # for groups whose topics are outside the keyword list.
+        if keyword_hits(text, self.config.interest_keyword_list(umo)):
+            state.social_energy = self._clamp_energy(
+                state.social_energy + ENERGY_KEYWORD_BONUS, self.config.energy_max
+            )
 
     # -- debounce --------------------------------------------------------
 
@@ -459,6 +475,7 @@ class SocialEngine:
 
         if now < state.mentioned_until:
             state.mentioned_until = 0.0
+            self.log(f"[decision] {umo} held back: bot was recently mentioned")
             self._notify()
             return
 
@@ -470,12 +487,14 @@ class SocialEngine:
             flow=self.flow,
         )
         if not gate.allowed:
+            self.log(f"[decision] {umo} gate={gate.reason}")
             self._notify()
             return
 
         refresh_activities(state, self.config, now)
         thread = select_thread(state, self.config, now, umo=umo)
         if thread is None:
+            self.log(f"[decision] {umo} no eligible thread")
             self._notify()
             return
 
@@ -486,6 +505,9 @@ class SocialEngine:
         )
         breakdown = compute_score(state, scored_text, self.config, now, umo=umo)
         if breakdown.total <= 0:
+            self.log(
+                f"[decision] {umo} score<=0 (negative keyword: {breakdown.negative_hit})"
+            )
             self._notify()
             return
 
@@ -493,7 +515,13 @@ class SocialEngine:
             max(self.config.base_speak_probability * breakdown.total, 0.0),
             MAX_PROBABILITY,
         )
-        if self.rng.random() > probability:
+        roll = self.rng.random()
+        self.log(
+            f"[decision] {umo} thread={thread.id} score={breakdown.total:.2f} "
+            f"prob={probability:.1%} roll={roll:.2f} -> "
+            + ("evaluate" if roll <= probability else "skip")
+        )
+        if roll > probability:
             self._notify()
             return
 
@@ -525,7 +553,7 @@ class SocialEngine:
 
         thread = find_thread(state, thread_id)
         if thread is None or not thread_is_active(thread, self.config, now):
-            self.last_decision[umo] = "thread_ended"
+            self._record_decision(umo, "thread_ended")
             return
 
         hint = build_group_hint(state, self.config, now)
@@ -547,24 +575,24 @@ class SocialEngine:
             # answered but declined, and back off so a hot group cannot hammer
             # a broken provider.
             self._note_llm_failure(state, now)
-            self.last_decision[umo] = "llm_failed"
+            self._record_decision(umo, "llm_failed")
             return
         decision = parse_decision(raw or "")
         if decision is None:
             # The model responded but not with valid JSON; back off as well.
             self._note_llm_failure(state, now)
-            self.last_decision[umo] = "parse_failed"
+            self._record_decision(umo, "parse_failed")
             return
 
         chosen = thread
         if decision.thread_id:
             candidate = find_thread(state, decision.thread_id)
             if candidate is None or not thread_is_active(candidate, self.config, self.clock()):
-                self.last_decision[umo] = "bad_thread"
+                self._record_decision(umo, "bad_thread")
                 return
             chosen = candidate
 
-        self.last_decision[umo] = decision.action
+        self._record_decision(umo, decision.action)
 
         if decision.action == "IGNORE":
             # P0 fix: IGNORE is a local choice, not "the bot was ignored".
@@ -580,7 +608,7 @@ class SocialEngine:
             max_length=self.config.max_reply_length,
         )
         if not reply:
-            self.last_decision[umo] = "empty_reply"
+            self._record_decision(umo, "empty_reply")
             return
 
         state.selected_thread_id = chosen.id
@@ -591,28 +619,28 @@ class SocialEngine:
 
         now = self.clock()
         if in_cooldown(state, now):
-            self.last_decision[umo] = "cooldown_cancel"
+            self._record_decision(umo, "cooldown_cancel")
             return
         if now < state.mentioned_until:
             state.mentioned_until = 0.0
-            self.last_decision[umo] = "mentioned_cancel"
+            self._record_decision(umo, "mentioned_cancel")
             return
         if not thread_is_active(chosen, self.config, now):
-            self.last_decision[umo] = "thread_ended"
+            self._record_decision(umo, "thread_ended")
             return
         if self._topic_moved_away(state, chosen, expected_revision, chosen_len, umo, now):
             # New messages arrived during the delay and the group moved on:
             # never send a reply computed for a stale topic.
-            self.last_decision[umo] = "topic_changed"
+            self._record_decision(umo, "topic_changed")
             return
 
         allowed, reason = self.flow.check(state, now)
         if not allowed:
-            self.last_decision[umo] = reason
+            self._record_decision(umo, reason)
             return
 
         if self.config.dry_run:
-            self.last_decision[umo] = "dry_run"
+            self._record_decision(umo, "dry_run")
             return
 
         self.flow.reserve(state, now)
@@ -626,7 +654,7 @@ class SocialEngine:
             state.local_outgoing_at = 0.0
             state.local_outgoing_text = ""
             self.flow.rollback(state, now)
-            self.last_decision[umo] = "send_failed"
+            self._record_decision(umo, "send_failed")
             self._notify()
             return
         self.flow.commit_success(state, now)
@@ -645,7 +673,7 @@ class SocialEngine:
         # Local record keeps the bot's participation visible even when the
         # platform does not echo our own outbound event back.
         attach_bot_message(chosen, payload, self.config, sent_at)
-        self.last_decision[umo] = "speak"
+        self._record_decision(umo, "speak")
 
         if self.config.memory_writeback and self.writeback is not None:
             try:

@@ -52,6 +52,7 @@ def make_engine(
     writeback=None,
     send_result=True,
     llm_calls=None,
+    log=None,
 ):
     async def llm_decide(umo, system_prompt, prompt):
         if llm_calls is not None:
@@ -75,6 +76,7 @@ def make_engine(
         sleep=sleep or _no_sleep,
         rng=rng or FakeRng(),
         clock=clock or (lambda: 1000.0),
+        log=log,
     )
 
 
@@ -959,3 +961,52 @@ def test_reply_truncated_to_configured_max_length():
 
     sent = asyncio.run(scenario())
     assert sent == [(UMO, "这个副本好", None)]
+
+
+def test_decision_funnel_logs_score_and_result():
+    async def scenario():
+        logs = []
+        engine = make_engine(
+            make_config(),
+            json.dumps({"action": "SPEAK", "topic": "闲聊", "reply": "聊得热闹"}),
+            log=logs.append,
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="随便聊聊最近怎么样", is_bot=False
+        )
+        await engine.wait_idle()
+        return logs
+
+    logs = asyncio.run(scenario())
+    assert any("score=" in line and "prob=" in line and "roll=" in line for line in logs)
+    assert any("-> speak" in line for line in logs)
+
+
+def test_daily_reset_refills_social_energy():
+    engine = make_engine(make_config(), json.dumps({"action": "IGNORE"}))
+    state = engine.get_state(UMO)
+    state.social_energy = 0.1
+    state.proactive_sent_today = 7
+    state.daily_reset_date = "2000-01-01"
+
+    engine._ensure_daily_reset(state, 1000.0)
+    assert state.social_energy == engine.config.energy_initial
+    assert state.proactive_sent_today == 0
+
+
+def test_plain_chat_no_longer_drains_energy():
+    async def scenario():
+        engine = make_engine(make_config(), json.dumps({"action": "IGNORE"}))
+        for index in range(5):
+            await engine.handle_message(
+                UMO,
+                message_id=f"m{index}",
+                sender="u1",
+                text="普通闲聊消息",
+                is_bot=False,
+            )
+            await engine.wait_idle()
+        return engine
+
+    engine = asyncio.run(scenario())
+    assert engine.get_state(UMO).social_energy == engine.config.energy_initial

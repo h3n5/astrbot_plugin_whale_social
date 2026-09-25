@@ -7,14 +7,15 @@
 本插件**只做主动层**：被 @ / 唤醒的消息一律交给 AstrBot 默认 agent，插件只观察、不回复、不拦截事件。主动发言只在**发送成功后**尝试写回 AstrBot 会话记忆，让后续正常回复也能看到它刚才说过的话。
 
 - 目标平台：AstrBot 4.x（`astrbot_version: ">=4.5.7,<5"`）
-- 当前版本：`0.2.5`
+- 当前版本：`0.2.6`
 - 设计文档（本地 `docs/`，不随仓库发布）：`docs/astrbot_plugin_whale_social_PLAN.md`、`docs/astrbot_plugin_whale_social_PLAN_v2.md`（V2 会话线程 / Debounce / 群级决策，已在 `0.2.1` 落地）
 
 ---
 
 ## 特性
 
-- **克制的主动参与**：本地规则先过滤，绝大多数消息直接被丢弃，只有少量进入 LLM 决策。
+- **克制的主动参与**：本地规则先过滤，只有部分机会进入 LLM 决策；决策是否发声最终由模型把关。
+- **决策漏斗可观测**：每次决策在日志输出一行 `[decision]`（门控原因 / 得分 / 概率 / 掷点 / 结果），不说话时对照日志即可定位卡在哪一级，不用猜。
 - **三态决策**：`IGNORE` / `WAIT` / `SPEAK`，强制 JSON 输出，带括号平衡容错解析。
 - **会话线程（V2）**：把群消息按「引用 → @ → 关键词 → 同人续聊 → 新会话」聚成会话，每次只挑一个最值得参与的会话，而不是逐条消息反应。
 - **防抖决策（V2）**：群聊刷屏时先静默等待稳定（`debounce_seconds`），最多等到 `debounce_max_wait_seconds`，避免在别人打字中途插话。
@@ -90,10 +91,10 @@ WebUI 配置文件为 [`_conf_schema.json`](./_conf_schema.json)，全部默认�
 | `min_message_length` | int | `2` | 过短消息不触发判断 |
 | `context_message_limit` | int | `20` | 入窗并发送给 LLM 的最近消息条数 |
 | `incoming_rate_limit` | int | `30` | 30 秒内人类消息超过此值视为刷屏 |
-| `min_cooldown_seconds` | int | `900` | 主动发言冷却下限 |
-| `max_cooldown_seconds` | int | `1800` | 主动发言冷却上限 |
+| `min_cooldown_seconds` | int | `180` | 主动发言冷却下限 |
+| `max_cooldown_seconds` | int | `600` | 主动发言冷却上限 |
 | `reply_window_seconds` | int | `120` | 回应窗口；超时无回应标记“被忽略” |
-| `base_speak_probability` | float | `0.08` | 主动发言基础概率（× SpeakScore，上限 0.8） |
+| `base_speak_probability` | float | `0.3` | 主动发言基础概率（× SpeakScore，上限 0.8） |
 | `high_interest_bonus` | float | `1.8` | 高兴趣话题的参与倍率上限 |
 | `energy_initial` | float | `0.6` | 初始社交能量 |
 | `energy_max` | float | `1.0` | 社交能量上限 |

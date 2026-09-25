@@ -38,13 +38,13 @@
   "min_cooldown_seconds": {
     "description": "最小主动发言冷却",
     "type": "int",
-    "default": 900,
+    "default": 180,
     "hint": "主动发言后至少等待多少秒。"
   },
   "max_cooldown_seconds": {
     "description": "最大主动发言冷却",
     "type": "int",
-    "default": 1800,
+    "default": 600,
     "hint": "主动发言后的随机冷却上限。"
   },
   "reply_window_seconds": {
@@ -56,8 +56,8 @@
   "base_speak_probability": {
     "description": "基础主动发言概率",
     "type": "float",
-    "default": 0.08,
-    "hint": "本地评分通过后，最终主动发送概率的基础值。",
+    "default": 0.3,
+    "hint": "本地评分通过后，最终主动发送概率的基础值。日志中 [decision] 行会输出每次的得分/概率/结果，可据此调参。",
     "slider": {
       "min": 0,
       "max": 1,

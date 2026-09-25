@@ -44,6 +44,7 @@ class WhaleSocialPlugin(Star):
             send_message=self._send_message,
             writeback=self._memory_writeback,
             on_change=self._schedule_save,
+            log=self._engine_log,
         )
         self._save_task: Optional[asyncio.Task[None]] = None
         self._dirty = False
@@ -100,6 +101,9 @@ class WhaleSocialPlugin(Star):
             logger.warning(f"[{PLUGIN_NAME}] save state failed: {exc}")
 
     # -- AstrBot adapters ------------------------------------------------
+
+    def _engine_log(self, message: str) -> None:
+        logger.info(f"[{PLUGIN_NAME}] {message}")
 
     async def _resolve_provider_id(self, umo: str) -> Optional[str]:
         if self.cfg.provider_id:
@@ -203,7 +207,15 @@ class WhaleSocialPlugin(Star):
                 if SEND_TIMEOUT_SECONDS > 0
                 else await coro
             )
-            return bool(result)
+            sent = bool(result)
+            if sent:
+                # Some adapters (qq_official) can return True while silently
+                # dropping the message; this line is the audit trail to grep.
+                logger.info(
+                    f"[{PLUGIN_NAME}] proactive reply sent to {umo} "
+                    f"({len(text)} chars): {text}"
+                )
+            return sent
         except asyncio.TimeoutError:
             logger.error(
                 f"[{PLUGIN_NAME}] send_message timed out after {SEND_TIMEOUT_SECONDS}s for {umo}"

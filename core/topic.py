@@ -48,7 +48,10 @@ def interest_multiplier(
     hits = keyword_hits(text, keywords)
     if hits:
         return min(1.0 + 0.7 * len(hits), bonus), hits, None
-    return 0.35, [], None
+    # Baseline for keyword-less chatter. It is deliberately mild: groups whose
+    # topics fall outside the keyword list must still reach the decision LLM
+    # sometimes, otherwise the probability funnel closes entirely.
+    return 0.6, [], None
 
 
 def topic_still_relevant(recent_texts: Iterable[str], keywords: Iterable[str]) -> bool:

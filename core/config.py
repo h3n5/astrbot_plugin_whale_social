@@ -14,7 +14,7 @@ DEFAULT_DECISION_PROMPT = """你是群聊机器人的“社交决策器”。
 你的任务不是回答问题，而是判断机器人现在是否应该主动参与群聊。
 
 行为原则：
-1. 大多数时候应该潜水。
+1. 大多数时候安静潜水，但气氛合适或话题有意思时，可以自然地插一句话。
 2. 不要为了说话而说话。
 3. 话题与机器人兴趣高度相关时，可以参与。
 4. 群聊正在高速连续刷屏时，不要强行插话。
@@ -166,10 +166,10 @@ class PluginConfig:
     min_message_length: int = 2
     context_message_limit: int = 20
     incoming_rate_limit: int = 30
-    min_cooldown_seconds: float = 900.0
-    max_cooldown_seconds: float = 1800.0
+    min_cooldown_seconds: float = 180.0
+    max_cooldown_seconds: float = 600.0
     reply_window_seconds: float = 120.0
-    base_speak_probability: float = 0.08
+    base_speak_probability: float = 0.3
     high_interest_bonus: float = 1.8
     energy_initial: float = 0.6
     energy_max: float = 1.0
@@ -222,10 +222,10 @@ class PluginConfig:
             min_message_length=_as_int(_get(mapping, "min_message_length", 2), 2),
             context_message_limit=_as_int(_get(mapping, "context_message_limit", 20), 20),
             incoming_rate_limit=_as_int(_get(mapping, "incoming_rate_limit", 30), 30),
-            min_cooldown_seconds=_as_float(_get(mapping, "min_cooldown_seconds", 900), 900.0),
-            max_cooldown_seconds=_as_float(_get(mapping, "max_cooldown_seconds", 1800), 1800.0),
+            min_cooldown_seconds=_as_float(_get(mapping, "min_cooldown_seconds", 180), 180.0),
+            max_cooldown_seconds=_as_float(_get(mapping, "max_cooldown_seconds", 600), 600.0),
             reply_window_seconds=_as_float(_get(mapping, "reply_window_seconds", 120), 120.0),
-            base_speak_probability=_as_float(_get(mapping, "base_speak_probability", 0.08), 0.08),
+            base_speak_probability=_as_float(_get(mapping, "base_speak_probability", 0.3), 0.3),
             high_interest_bonus=_as_float(_get(mapping, "high_interest_bonus", 1.8), 1.8),
             energy_initial=_as_float(_get(mapping, "energy_initial", 0.6), 0.6),
             energy_max=_as_float(_get(mapping, "energy_max", 1.0), 1.0),

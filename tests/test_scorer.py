@@ -66,3 +66,12 @@ def test_per_group_keyword_override():
     config = _config(group_keyword_overrides={"umo": ["钓鱼"]})
     breakdown = compute_score(GroupState(), "今天去钓鱼", config, NOW, umo="umo")
     assert "钓鱼" in breakdown.matched_keywords
+
+
+def test_keywordless_text_keeps_mild_baseline():
+    from core.topic import interest_multiplier
+
+    multiplier, hits, negative = interest_multiplier("今天天气还行", [], [], 1.8)
+    assert multiplier == 0.6
+    assert hits == []
+    assert negative is None
