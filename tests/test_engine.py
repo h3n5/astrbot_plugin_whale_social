@@ -53,6 +53,7 @@ def make_engine(
     send_result=True,
     llm_calls=None,
     log=None,
+    llm_reply=None,
 ):
     async def llm_decide(umo, system_prompt, prompt):
         if llm_calls is not None:
@@ -68,10 +69,14 @@ def make_engine(
         if writebacks is not None:
             writebacks.append((umo, user_text, assistant_text))
 
+    async def default_llm_reply(umo, system_prompt, prompt):
+        return None
+
     return SocialEngine(
         config,
         llm_decide=llm_decide,
         send_message=send_message,
+        llm_reply=llm_reply,
         writeback=writeback or default_writeback,
         sleep=sleep or _no_sleep,
         rng=rng or FakeRng(),
@@ -1010,3 +1015,76 @@ def test_plain_chat_no_longer_drains_energy():
 
     engine = asyncio.run(scenario())
     assert engine.get_state(UMO).social_energy == engine.config.energy_initial
+
+
+def test_speak_uses_reply_stage_for_text_and_prompt_has_factors():
+    async def scenario():
+        llm_calls, reply_calls, sent = [], [], []
+
+        async def llm_reply(umo, system_prompt, prompt):
+            reply_calls.append(prompt)
+            return "新生成的回复"
+
+        decision = json.dumps({"action": "SPEAK", "topic": "副本", "reply": "旧字段回复"})
+        engine = make_engine(
+            make_config(), decision, sent=sent, llm_calls=llm_calls, llm_reply=llm_reply
+        )
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return llm_calls, reply_calls, sent
+
+    llm_calls, reply_calls, sent = asyncio.run(scenario())
+    assert "本地社交信号" in llm_calls[0]
+    assert "addressed_to_me" in llm_calls[0]
+    assert reply_calls and "请直接输出要发送的那条群聊消息" in reply_calls[0]
+    assert sent == [(UMO, "新生成的回复", None)]
+
+
+def test_reply_stage_failure_records_reply_failed_and_backs_off():
+    async def scenario():
+        sent = []
+
+        async def llm_reply(umo, system_prompt, prompt):
+            return None
+
+        decision = json.dumps({"action": "SPEAK", "reply": "x"})
+        engine = make_engine(make_config(), decision, sent=sent, llm_reply=llm_reply)
+        await engine.handle_message(
+            UMO, message_id="1", sender="u1", text="今晚打副本吗", is_bot=False
+        )
+        await engine.wait_idle()
+        return engine, sent
+
+    engine, sent = asyncio.run(scenario())
+    state = engine.get_state(UMO)
+    assert sent == []
+    assert engine.last_decision[UMO] == "reply_failed"
+    assert state.llm_failure_count == 1
+    assert state.next_speak_after > 0
+
+
+def test_addressed_reply_to_bot_message_boosts_factors():
+    async def scenario():
+        llm_calls = []
+        decision = json.dumps({"action": "SPEAK", "reply": "对，就是这样"})
+        engine = make_engine(make_config(), decision, sent=[], llm_calls=llm_calls)
+        # Seed a bot message the trigger can quote.
+        await engine.handle_message(
+            UMO, message_id="b1", sender="bot", text="我昨晚过了那个副本", is_bot=True
+        )
+        await engine.handle_message(
+            UMO,
+            message_id="2",
+            sender="u1",
+            text="你说的是什么副本",
+            is_bot=False,
+            reply_to="b1",
+        )
+        await engine.wait_idle()
+        return llm_calls
+
+    llm_calls = asyncio.run(scenario())
+    assert llm_calls
+    assert '"addressed_to_me": 2.0' in llm_calls[-1]

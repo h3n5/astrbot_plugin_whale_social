@@ -39,15 +39,21 @@ KEYWORD_TEXTS = [
 ]
 
 
-def _single_round_probability(state: GroupState, text: str) -> tuple[float, float]:
-    breakdown = compute_score(state, text, DEFAULTS, NOW)
+def _single_round_probability(
+    state: GroupState, text: str, *, addressed: bool = False
+) -> tuple[float, float]:
+    breakdown = compute_score(
+        state, text, DEFAULTS, NOW, addressed=addressed, trigger_text=text
+    )
     probability = min(DEFAULTS.base_speak_probability * breakdown.total, 0.8)
     return breakdown.total, probability
 
 
 def _make_state(**overrides) -> GroupState:
     energy = overrides.pop("social_energy", DEFAULTS.energy_initial)
-    return GroupState(social_energy=energy, **overrides)
+    state = GroupState(social_energy=energy, **overrides)
+    state.last_user_message_time = NOW - 5.0
+    return state
 
 
 def _quiet_state(**overrides) -> GroupState:
@@ -64,15 +70,17 @@ def _busy_state(**overrides) -> GroupState:
 
 def test_print_single_round_probability_table():
     cases = [
-        ("新群安静闲聊（无关键词）", _quiet_state(), "今天天气不错", 0.10, 0.20),
-        ("新群安静闲聊（命中1个关键词）", _quiet_state(), "周末打个副本吧", 0.28, 0.45),
-        ("热闹群（60秒15条，无关键词）", _busy_state(), "今天天气不错", 0.04, 0.12),
-        ("上次发言被无视", _quiet_state(last_bot_ignored=True), "今天天气不错", 0.02, 0.08),
-        ("能量地板0.1（连发一天后）", _quiet_state(social_energy=0.1), "今天天气不错", 0.0, 0.05),
+        ("新群安静闲聊（无关键词）", _quiet_state(), "今天天气不错", False, 0.18, 0.32),
+        ("新群安静闲聊（命中1个关键词）", _quiet_state(), "周末打个副本吧", False, 0.25, 0.42),
+        ("安静群有人提问（无关键词）", _quiet_state(), "有人知道这个怎么解决吗", False, 0.25, 0.42),
+        ("被引用回复（addressed，应打满上限）", _quiet_state(), "你是说副本机制吗", True, 0.70, 0.81),
+        ("热闹群（60秒15条，无关键词）", _busy_state(), "今天天气不错", False, 0.07, 0.15),
+        ("5分钟内已发过2条", _quiet_state(proactive_send_times=[NOW - 60, NOW - 120]), "今天天气不错", False, 0.04, 0.12),
+        ("能量地板0.1（连发一天后）", _quiet_state(social_energy=0.1), "今天天气不错", False, 0.0, 0.08),
     ]
     print(f"\n{'场景':<28} {'得分':>6} {'单次概率':>8}")
-    for name, state, text, low, high in cases:
-        score, probability = _single_round_probability(state, text)
+    for name, state, text, addressed, low, high in cases:
+        score, probability = _single_round_probability(state, text, addressed=addressed)
         print(f"{name:<28} {score:>6.2f} {probability:>7.1%}")
         assert low <= probability <= high, f"{name}: prob={probability:.3f} outside [{low}, {high}]"
 

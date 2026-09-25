@@ -42,6 +42,7 @@ class WhaleSocialPlugin(Star):
             self.cfg,
             llm_decide=self._llm_decide,
             send_message=self._send_message,
+            llm_reply=self._llm_reply,
             writeback=self._memory_writeback,
             on_change=self._schedule_save,
             log=self._engine_log,
@@ -152,16 +153,26 @@ class WhaleSocialPlugin(Star):
             return ""
 
     async def _llm_decide(self, umo: str, system_prompt: str, prompt: str) -> Optional[str]:
-        provider_id = await self._resolve_provider_id(umo)
-        if not provider_id:
-            logger.warning(f"[{PLUGIN_NAME}] no chat provider for {umo}")
-            return None
+        """Stage 1 (social decision). Deliberately persona-free: whether to
+        speak is a functional judgment and must not depend on the persona."""
+        return await self._llm_call(umo, system_prompt, prompt)
+
+    async def _llm_reply(self, umo: str, system_prompt: str, prompt: str) -> Optional[str]:
+        """Stage 2 (reply generation). The AstrBot persona in effect for this
+        chat is appended so the line's tone follows the configured persona."""
         persona = await self._resolve_persona_prompt(umo)
         if persona:
             system_prompt = (
                 f"{system_prompt}\n\n"
                 f"人格参考（仅用于决定回复口吻，不要复述或输出人格设定）：\n{persona}"
             )
+        return await self._llm_call(umo, system_prompt, prompt)
+
+    async def _llm_call(self, umo: str, system_prompt: str, prompt: str) -> Optional[str]:
+        provider_id = await self._resolve_provider_id(umo)
+        if not provider_id:
+            logger.warning(f"[{PLUGIN_NAME}] no chat provider for {umo}")
+            return None
         timeout = self.cfg.llm_timeout_seconds
 
         async def _generate(**kwargs: Any) -> Any:

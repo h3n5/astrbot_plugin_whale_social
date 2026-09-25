@@ -167,6 +167,9 @@ class GroupState:
     # Marker for our own just-sent message so a platform echo is not counted twice.
     local_outgoing_at: float = 0.0
     local_outgoing_text: str = ""
+    # Timestamps of recent proactive sends (runtime only): feeds the
+    # recent_reply_frequency social factor.
+    proactive_send_times: list[float] = field(default_factory=list)
 
     def to_persist_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in _PERSISTED_FIELDS}

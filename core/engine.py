@@ -21,14 +21,20 @@ from .collector import MessageCollector
 from .config import PluginConfig
 from .cooldown import in_cooldown, note_human_reply, settle_reply_window
 from .debounce import DebounceTracker
-from .decision import build_decision_prompt, build_system_prompt, parse_decision
+from .decision import (
+    build_decision_prompt,
+    build_reply_prompt,
+    build_reply_system_prompt,
+    build_system_prompt,
+    parse_decision,
+)
 from .dedup import MessageDeduplicator
 from .flow import FlowController
 from .gate import check_gate
 from .memory import build_group_hint
 from .models import GroupState, MessageEnvelope
 from .reply import sanitize_reply
-from .scorer import compute_score
+from .scorer import compute_score, format_factors
 from .threads import (
     ConversationThread,
     assign_thread,
@@ -46,6 +52,7 @@ from .timeutil import day_key, local_datetime
 from .topic import keyword_hits
 
 LlmDecide = Callable[[str, str, str], Awaitable[Optional[str]]]
+LlmReply = Callable[[str, str, str], Awaitable[Optional[str]]]
 SendMessage = Callable[[str, str, Optional[str]], Awaitable[bool]]
 Writeback = Callable[[str, str, str], Awaitable[None]]
 OnChange = Callable[[], None]
@@ -71,6 +78,7 @@ class SocialEngine:
         *,
         llm_decide: LlmDecide,
         send_message: SendMessage,
+        llm_reply: Optional[LlmReply] = None,
         writeback: Optional[Writeback] = None,
         on_change: Optional[OnChange] = None,
         clock: Clock = time.time,
@@ -80,6 +88,7 @@ class SocialEngine:
     ) -> None:
         self.config = config
         self.llm_decide = llm_decide
+        self.llm_reply = llm_reply
         self.send_message = send_message
         self.writeback = writeback
         self.on_change = on_change
@@ -372,6 +381,25 @@ class SocialEngine:
             return True
         return False
 
+    @staticmethod
+    def _trigger_addresses_bot(
+        state: GroupState, trigger: Optional[dict[str, Any]]
+    ) -> bool:
+        """Whether the trigger message talks *to* the bot (quoted a bot message).
+
+        This feeds the ``addressed_to_me`` social factor. Direct @/wake
+        mentions never reach this path: they are observe-only by design.
+        """
+        if trigger is None:
+            return False
+        reply_to = str(trigger.get("reply_to", "") or "")
+        if not reply_to:
+            return False
+        return any(
+            item.get("is_bot") and str(item.get("message_id", "")) == reply_to
+            for item in state.messages
+        )
+
     def _is_duplicate(self, envelope: MessageEnvelope, now: float) -> bool:
         key = envelope.dedup_key()
         if key:
@@ -500,25 +528,34 @@ class SocialEngine:
 
         trigger = last_human_message(thread)
         trigger_text = str(trigger.get("text", "")) if trigger else ""
+        addressed = self._trigger_addresses_bot(state, trigger)
         scored_text = " ".join(
             str(item.get("text", "")) for item in thread.messages[-SCORING_TAIL:]
         )
-        breakdown = compute_score(state, scored_text, self.config, now, umo=umo)
-        if breakdown.total <= 0:
+        factors = compute_score(
+            state,
+            scored_text,
+            self.config,
+            now,
+            umo=umo,
+            addressed=addressed,
+            trigger_text=trigger_text,
+        )
+        if factors.total <= 0:
             self.log(
-                f"[decision] {umo} score<=0 (negative keyword: {breakdown.negative_hit})"
+                f"[decision] {umo} score<=0 (negative keyword: {factors.negative_hit})"
             )
             self._notify()
             return
 
         probability = min(
-            max(self.config.base_speak_probability * breakdown.total, 0.0),
+            max(self.config.base_speak_probability * factors.total, 0.0),
             MAX_PROBABILITY,
         )
         roll = self.rng.random()
         self.log(
-            f"[decision] {umo} thread={thread.id} score={breakdown.total:.2f} "
-            f"prob={probability:.1%} roll={roll:.2f} -> "
+            f"[decision] {umo} thread={thread.id} factors={format_factors(factors)} "
+            f"score={factors.total:.2f} prob={probability:.1%} roll={roll:.2f} -> "
             + ("evaluate" if roll <= probability else "skip")
         )
         if roll > probability:
@@ -531,7 +568,9 @@ class SocialEngine:
         state.reserved_thread_id = thread.id
         state.reserved_revision = state.revision
         task = asyncio.create_task(
-            self._evaluate_and_reply(umo, thread.id, trigger_text, state.revision)
+            self._evaluate_and_reply(
+                umo, thread.id, trigger_text, state.revision, addressed
+            )
         )
         self.pending[umo] = task
         task.add_done_callback(self._done_callback(umo, task))
@@ -545,6 +584,7 @@ class SocialEngine:
         thread_id: str,
         trigger_text: str,
         expected_revision: int,
+        addressed: bool = False,
     ) -> None:
         state = self.get_state(umo)
         now = self.clock()
@@ -556,6 +596,20 @@ class SocialEngine:
             self._record_decision(umo, "thread_ended")
             return
 
+        # Recompute the factors at evaluate time so the decision model sees
+        # the social signals as of now, not as of the debounce fire.
+        scored_text = " ".join(
+            str(item.get("text", "")) for item in thread.messages[-SCORING_TAIL:]
+        )
+        factors = compute_score(
+            state,
+            scored_text,
+            self.config,
+            now,
+            umo=umo,
+            addressed=addressed,
+            trigger_text=trigger_text,
+        )
         hint = build_group_hint(state, self.config, now)
         system_prompt = build_system_prompt(self.config)
         prompt = build_decision_prompt(
@@ -566,6 +620,7 @@ class SocialEngine:
             threads_overview=format_overview(
                 state, self.config, now, exclude_id=thread.id
             ),
+            factors_text=format_factors(factors),
         )
 
         raw = await self.llm_decide(umo, system_prompt, prompt)
@@ -602,8 +657,22 @@ class SocialEngine:
             state.shown_topic = decision.topic or chosen.topic or state.shown_topic
             return
 
+        reply: Optional[str] = decision.reply
+        if self.llm_reply is not None:
+            # Two-stage flow: the decision model chose to speak, a separate
+            # reply-generation call (persona-aware, via the adapter) writes
+            # the actual line.
+            reply = await self._generate_reply(
+                umo, state, chosen, decision, trigger_text, addressed
+            )
+            if reply is None:
+                now = self.clock()
+                self._note_llm_failure(state, now)
+                self._record_decision(umo, "reply_failed")
+                return
+
         reply = sanitize_reply(
-            decision.reply,
+            reply,
             self.config.blocklist(),
             max_length=self.config.max_reply_length,
         )
@@ -681,6 +750,33 @@ class SocialEngine:
             except Exception:  # pragma: no cover - memory is best-effort
                 pass
         self._notify()
+
+    async def _generate_reply(
+        self,
+        umo: str,
+        state: GroupState,
+        thread: ConversationThread,
+        decision: Any,
+        trigger_text: str,
+        addressed: bool,
+    ) -> Optional[str]:
+        """Second LLM stage: write the actual line for a SPEAK decision.
+
+        Returns ``None`` on provider failure (mapped to ``reply_failed``); an
+        empty string passes through to the empty-reply handling.
+        """
+        system_prompt = build_reply_system_prompt(self.config)
+        prompt = build_reply_prompt(
+            context_text=self.collector.format_messages(thread.messages),
+            trigger_text=trigger_text,
+            reason=decision.reason,
+            topic=decision.topic or thread.topic or state.shown_topic,
+            addressed=addressed,
+        )
+        raw = await self.llm_reply(umo, system_prompt, prompt)
+        if raw is None:
+            return None
+        return (raw or "").strip()
 
     def _mention_target(self, thread, decision) -> Optional[str]:
         if decision.target_type != "USER" or not decision.target_user_id:

@@ -103,6 +103,13 @@ class MessageCollector:
         suppressed via the ``local_outgoing_*`` marker.
         """
         state.last_proactive_msg = text
+        # Track send times for the recent_reply_frequency social factor; the
+        # one-hour retention bounds the list while covering the 30-min window.
+        state.proactive_send_times.append(now)
+        send_cutoff = now - 3600.0
+        state.proactive_send_times = [
+            stamp for stamp in state.proactive_send_times if stamp >= send_cutoff
+        ]
         # Draw the cooldown before mutating streak / ignored / last-bot-time so
         # the tier reflects the state *before* this send (a first message uses
         # the normal range rather than always looking "recent").
